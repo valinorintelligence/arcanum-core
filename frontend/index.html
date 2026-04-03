@@ -33,9 +33,82 @@
     @keyframes pulse-glow { 0%, 100% { box-shadow: 0 0 4px rgba(6,182,212,0.3); } 50% { box-shadow: 0 0 12px rgba(6,182,212,0.6); } }
     .glow-pulse { animation: pulse-glow 2s ease-in-out infinite; }
     .console-line { white-space: pre-wrap; word-break: break-all; }
+
+    /* Grid overlay */
+    .grid-overlay {
+      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+      background-image: linear-gradient(rgba(6,182,212,0.03) 1px, transparent 1px),
+                        linear-gradient(90deg, rgba(6,182,212,0.03) 1px, transparent 1px);
+      background-size: 40px 40px; pointer-events: none; z-index: 0;
+    }
+
+    /* Scan line effect */
+    @keyframes scanline { 0% { top: -100%; } 100% { top: 100%; } }
+    .scan-line::after {
+      content: ''; position: absolute; top: -100%; left: 0; width: 100%; height: 40px;
+      background: linear-gradient(to bottom, transparent, rgba(6,182,212,0.08), transparent);
+      animation: scanline 6s linear infinite; pointer-events: none;
+    }
+
+    /* Gradient border animation */
+    @keyframes borderShift { 0%,100% { border-color: rgba(6,182,212,0.3); } 50% { border-color: rgba(16,185,129,0.3); } }
+    .border-shift { animation: borderShift 8s ease-in-out infinite; }
+
+    /* Severity badges */
+    .sev-critical { background: #dc2626; } .sev-high { background: #ea580c; }
+    .sev-medium { background: #ca8a04; } .sev-low { background: #2563eb; } .sev-info { background: #6b7280; }
+
+    /* Phase indicator */
+    .phase-dot { width: 12px; height: 12px; border-radius: 50%; }
+    .phase-active { background: #06b6d4; box-shadow: 0 0 8px rgba(6,182,212,0.6); }
+    .phase-done { background: #10b981; }
+    .phase-pending { background: #374151; }
+
+    /* Particle canvas */
+    #particles { position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0; }
+
+    /* Tool gallery image frames */
+    .gallery-frame { position: relative; overflow: hidden; border-radius: 8px; border: 1px solid rgba(6,182,212,0.2); }
+    .gallery-frame::after {
+      content: ''; position: absolute; top: -100%; left: 0; width: 100%; height: 40px;
+      background: linear-gradient(to bottom, transparent, rgba(6,182,212,0.06), transparent);
+      animation: scanline 6s linear infinite;
+    }
+
+    /* Progress bar */
+    @keyframes progressPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.7; } }
+    .progress-active { animation: progressPulse 1.5s ease-in-out infinite; }
   </style>
 </head>
 <body class="bg-surface-950 text-gray-200 min-h-screen" x-data="arcanum()" x-init="init()">
+  <!-- Particle canvas background -->
+  <canvas id="particles"></canvas>
+  <div class="grid-overlay"></div>
+
+  <script>
+  // Particle system
+  (function(){
+    const c=document.getElementById('particles'),ctx=c.getContext('2d');
+    let w,h,particles=[];
+    function resize(){w=c.width=window.innerWidth;h=c.height=window.innerHeight;}
+    window.addEventListener('resize',resize);resize();
+    for(let i=0;i<50;i++)particles.push({x:Math.random()*w,y:Math.random()*h,vx:(Math.random()-0.5)*0.3,vy:(Math.random()-0.5)*0.3,r:Math.random()*1.5+0.5});
+    function draw(){
+      ctx.clearRect(0,0,w,h);
+      particles.forEach((p,i)=>{
+        p.x+=p.vx;p.y+=p.vy;
+        if(p.x<0)p.x=w;if(p.x>w)p.x=0;if(p.y<0)p.y=h;if(p.y>h)p.y=0;
+        ctx.beginPath();ctx.arc(p.x,p.y,p.r,0,Math.PI*2);ctx.fillStyle='rgba(6,182,212,0.3)';ctx.fill();
+        for(let j=i+1;j<particles.length;j++){
+          const dx=p.x-particles[j].x,dy=p.y-particles[j].y,d=Math.sqrt(dx*dx+dy*dy);
+          if(d<120){ctx.beginPath();ctx.moveTo(p.x,p.y);ctx.lineTo(particles[j].x,particles[j].y);ctx.strokeStyle=`rgba(6,182,212,${0.1*(1-d/120)})`;ctx.stroke();}
+        }
+      });
+      requestAnimationFrame(draw);
+    }
+    draw();
+  })();
+  </script>
 
   <!-- ============================================================ -->
   <!-- HEADER                                                        -->
