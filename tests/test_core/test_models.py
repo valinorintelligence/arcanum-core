@@ -3,26 +3,26 @@ from arcanum.core.models import Mode, Status, Severity, StashType
 
 
 def test_mode_enum():
-    assert Mode.AUTOPILOT.value == "autopilot"
-    assert Mode.COPILOT.value == "copilot"
-    assert Mode.MANUAL.value == "manual"
+    assert Mode.autopilot.value == "autopilot"
+    assert Mode.copilot.value == "copilot"
+    assert Mode.manual.value == "manual"
 
 
 def test_severity_enum():
-    assert Severity.CRITICAL.value == "critical"
-    assert Severity.HIGH.value == "high"
-    assert Severity.MEDIUM.value == "medium"
-    assert Severity.LOW.value == "low"
-    assert Severity.INFO.value == "info"
+    assert Severity.critical.value == "critical"
+    assert Severity.high.value == "high"
+    assert Severity.medium.value == "medium"
+    assert Severity.low.value == "low"
+    assert Severity.info.value == "info"
 
 
 def test_stash_type_enum():
-    assert StashType.CREDENTIAL.value == "credential"
-    assert StashType.HOST.value == "host"
-    assert StashType.PAYLOAD.value == "payload"
+    assert StashType.credential.value == "credential"
+    assert StashType.host.value == "host"
+    assert StashType.payload.value == "payload"
 
 
 def test_status_enum():
-    assert Status.CREATED.value == "created"
-    assert Status.RUNNING.value == "running"
-    assert Status.COMPLETE.value == "complete"
+    assert Status.created.value == "created"
+    assert Status.running.value == "running"
+    assert Status.complete.value == "complete"

@@ -119,7 +119,7 @@ class StashItem(BaseModel):
     """A stashed credential, hash, host, or other artifact."""
 
     id: str
-    type: StashType
+    type: str  # StashType value as string — DB stores plain strings
     value: str
     note: Optional[str] = None
     session_id: Optional[str] = None

@@ -14,6 +14,7 @@ from ..core.cve_kb import CVEKnowledgeBase
 from ..core.stash import StashManager
 from ..core.alerts import AlertEngine
 from ..core.reports import ReportEngine
+from ..core.demo_data import seed_all_demo_data
 from ..agent.llm import OllamaClient
 from ..agent.session import SessionManager
 
@@ -44,10 +45,28 @@ async def lifespan(app: FastAPI):
     app.state.report_engine = ReportEngine()
 
     # Initialize LLM client
-    app.state.llm = OllamaClient(config.ollama_url, config.ollama_model)
+    app.state.llm = OllamaClient(
+        base_url=config.ollama_url,
+        model=config.ollama_model,
+        timeout=config.ollama_timeout,
+        num_ctx=config.ollama_num_ctx,
+        temperature=config.ollama_temperature,
+        num_predict=config.ollama_num_predict,
+        repeat_penalty=config.ollama_repeat_penalty,
+        enable_thinking=config.ollama_enable_thinking,
+    )
 
     # Active sessions/engines
     app.state.active_engines = {}
+
+    # Seed demo data on first run
+    try:
+        result = await seed_all_demo_data(db, cve_kb)
+        if any(v > 0 for v in result.values()):
+            import logging
+            logging.getLogger("arcanum").info(f"Demo data seeded: {result}")
+    except Exception:
+        pass  # Non-fatal — demo data is optional
 
     yield
 
@@ -86,17 +105,61 @@ def create_app() -> FastAPI:
     # Health check
     @app.get("/api/health")
     async def health():
-        llm_ok = await app.state.llm.check_health()
+        try:
+            llm_ok = await app.state.llm.check_health()
+        except Exception:
+            llm_ok = False
         return {
             "status": "ok",
             "version": "3.0.0",
             "llm_connected": llm_ok,
         }
 
-    # Serve frontend
-    frontend_dir = Path(__file__).parent.parent.parent / "frontend"
-    if frontend_dir.exists():
-        app.mount("/assets", StaticFiles(directory=frontend_dir / "assets"), name="assets")
+    # Dashboard stats
+    @app.get("/api/stats")
+    async def stats():
+        sessions = await app.state.db.fetch_all("SELECT status FROM sessions")
+        findings = await app.state.db.fetch_all("SELECT severity FROM findings")
+        stash_count = await app.state.db.fetch_one("SELECT COUNT(*) as cnt FROM stash")
+        cve_count = await app.state.cve_kb.count()
+
+        severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+        for f in findings:
+            sev = (f.get("severity") or "info").lower()
+            if sev in severity_counts:
+                severity_counts[sev] += 1
+
+        return {
+            "sessions": {
+                "total": len(sessions),
+                "running": sum(1 for s in sessions if s["status"] == "running"),
+                "complete": sum(1 for s in sessions if s["status"] == "complete"),
+            },
+            "findings": {
+                "total": len(findings),
+                **severity_counts,
+            },
+            "stash": stash_count["cnt"] if stash_count else 0,
+            "cves": cve_count,
+        }
+
+    # Demo seed endpoint
+    @app.post("/api/demo/seed")
+    async def demo_seed():
+        from ..core.demo_data import seed_all_demo_data
+        result = await seed_all_demo_data(app.state.db, app.state.cve_kb)
+        return {"seeded": result}
+
+    # Serve frontend — check multiple locations (dev vs Docker)
+    frontend_candidates = [
+        Path(__file__).parent.parent.parent / "frontend",  # dev: repo root
+        Path("/app/frontend"),                              # Docker workdir
+    ]
+    frontend_dir = next((d for d in frontend_candidates if (d / "index.html").exists()), None)
+    if frontend_dir:
+        assets_dir = frontend_dir / "assets"
+        if assets_dir.exists():
+            app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
 
         @app.get("/")
         async def serve_frontend():

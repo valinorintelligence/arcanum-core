@@ -1,4 +1,6 @@
 """Cross-operation artifact sharing system."""
+from __future__ import annotations
+
 import json
 import uuid
 from datetime import datetime, timezone
@@ -16,12 +18,13 @@ class StashManager:
 
     async def add(self, type: StashType, value: str, note: str = None, session_id: str = None) -> StashItem:
         item_id = f"stash-{uuid.uuid4().hex[:8]}"
+        type_str = type.value if isinstance(type, StashType) else type
         await self.db.execute(
             "INSERT INTO stash (id, type, value, note, session_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (item_id, type.value, value, note, session_id, datetime.now(timezone.utc).isoformat()),
+            (item_id, type_str, value, note, session_id, datetime.now(timezone.utc).isoformat()),
         )
         return StashItem(
-            id=item_id, type=type, value=value, note=note,
+            id=item_id, type=type_str, value=value, note=note,
             session_id=session_id, created_at=datetime.now(timezone.utc),
         )
 

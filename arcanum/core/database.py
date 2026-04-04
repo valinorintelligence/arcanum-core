@@ -60,20 +60,33 @@ class Database:
         self._conn: aiosqlite.Connection | None = None
 
     # ------------------------------------------------------------------
+    # Standalone connect / close
+    # ------------------------------------------------------------------
+
+    async def connect(self) -> None:
+        """Open the database connection (standalone, outside context manager)."""
+        if self._conn is None:
+            self._conn = await aiosqlite.connect(self.db_path)
+            self._conn.row_factory = aiosqlite.Row
+            await self._conn.execute("PRAGMA journal_mode=WAL")
+            await self._conn.execute("PRAGMA foreign_keys=ON")
+
+    async def close(self) -> None:
+        """Close the database connection."""
+        if self._conn:
+            await self._conn.close()
+            self._conn = None
+
+    # ------------------------------------------------------------------
     # Async context manager
     # ------------------------------------------------------------------
 
     async def __aenter__(self) -> "Database":
-        self._conn = await aiosqlite.connect(self.db_path)
-        self._conn.row_factory = aiosqlite.Row
-        await self._conn.execute("PRAGMA journal_mode=WAL")
-        await self._conn.execute("PRAGMA foreign_keys=ON")
+        await self.connect()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
-        if self._conn:
-            await self._conn.close()
-            self._conn = None
+        await self.close()
 
     # ------------------------------------------------------------------
     # Schema bootstrap

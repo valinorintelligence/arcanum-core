@@ -96,14 +96,14 @@ def load_registry() -> dict:
     """Load the tool registry from registry.json.
 
     Returns:
-        Dictionary mapping tool names to their configuration dicts.
+        The raw registry dict with a ``tools`` list.
     """
     registry_path = Path(__file__).parent / "registry.json"
     with open(registry_path, "r") as f:
-        data = json.load(f)
+        return json.load(f)
 
-    registry: dict[str, dict] = {}
-    for tool in data.get("tools", []):
-        registry[tool["name"]] = tool
 
-    return registry
+def load_registry_map() -> dict[str, dict]:
+    """Load the tool registry as a name→config mapping."""
+    data = load_registry()
+    return {tool["name"]: tool for tool in data.get("tools", [])}
