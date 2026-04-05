@@ -184,12 +184,12 @@ Auto-mapped playbooks with 289 keywords across 8 categories:
 
 | Category | Skills | Examples |
 |----------|--------|----------|
-| Recon | 10 | subdomain_enum, port_scan, web_crawl, tech_fingerprint |
-| Web | 12 | sqli_test, xss_test, dir_bruteforce, cors_test, ssrf_test |
-| Network | 6 | smb_enum, ad_enum, mitm_attack, tunnel_setup |
+| Recon | 11 | subdomain_enum, port_scan, web_crawl, tech_fingerprint, cloud_enum |
+| Web | 13 | sqli_test, xss_test, dir_bruteforce, cors_test, ssrf_test, auth_bypass |
+| Network | 7 | smb_enum, ad_enum, mitm_attack, tunnel_setup, wifi_audit |
 | Credentials | 5 | hash_crack, brute_force, secret_scan, default_creds |
-| Exploitation | 5 | metasploit_exploit, reverse_shell, privesc_check |
-| Post-Exploit | 4 | linux_privesc, credential_dump, ad_attack_path |
+| Exploitation | 6 | metasploit_exploit, reverse_shell, privesc_check, lateral_movement |
+| Post-Exploit | 5 | linux_privesc, credential_dump, ad_attack_path, data_exfil |
 | OSINT | 5 | username_osint, email_osint, google_dork |
 | CTF | 5 | ctf_web, ctf_crypto, ctf_forensics, ctf_pwn |
 
@@ -233,20 +233,37 @@ arcanum-core/
 
 ## Web UI
 
-The Web UI provides a dark-themed dashboard with:
-- Real-time WebSocket streaming of agent output
-- Dashboard with active ops, findings, stash stats
-- Tool category tabs (Recon, Web, Network, Creds, Exploit, Post, OSINT)
-- Findings viewer with severity badges and CVSS scores
-- Stash manager for cross-operation artifacts
-- Report generator with format selection
-- CVE search interface
-- Particle animation background with grid overlay
+The Web UI provides a dark-themed dashboard with real-time WebSocket streaming, particle animations, and a full-featured security operations interface.
 
 ```bash
 arcanum serve --port 8000
 # Open http://localhost:8000
 ```
+
+### Dashboard
+Active operations, target count, findings breakdown by severity, and stash item stats at a glance.
+
+![Dashboard](docs/screenshots/dashboard.png)
+
+### Findings
+All vulnerability findings with severity badges (Critical/High/Medium/Low), CVSS scores, CVE references, and verification status.
+
+![Findings](docs/screenshots/findings.png)
+
+### Stash
+Cross-operation artifact storage for credentials, hosts, payloads, tokens, and hashes discovered during engagements.
+
+![Stash](docs/screenshots/stash.png)
+
+### Reports
+Generate reports in PDF, HTML, Markdown, or JSON format from any completed operation.
+
+![Reports](docs/screenshots/reports.png)
+
+### CVE Search
+Search the local CVE knowledge base (250K+ CVEs with FTS5) by CVE ID, keyword, or product name.
+
+![CVE Search](docs/screenshots/cve-search.png)
 
 ---
 
