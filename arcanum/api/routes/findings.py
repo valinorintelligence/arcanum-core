@@ -23,6 +23,19 @@ class CreateFindingRequest(BaseModel):
     verified: bool = False
 
 
+def _format_finding_row(row: dict) -> dict:
+    import json
+    row = dict(row)
+    for col in ("affected", "evidence", "poc", "cwe_ids"):
+        val = row.get(col)
+        if isinstance(val, str) and val.strip():
+            try:
+                row[col] = json.loads(val)
+            except Exception:
+                pass
+    return row
+
+
 @router.get("/")
 async def list_findings(request: Request, session_id: str = None):
     if session_id:
@@ -31,7 +44,7 @@ async def list_findings(request: Request, session_id: str = None):
         )
     else:
         rows = await request.app.state.db.fetch_all("SELECT * FROM findings ORDER BY created_at DESC")
-    return {"findings": rows}
+    return {"findings": [_format_finding_row(r) for r in rows]}
 
 
 @router.post("/")
@@ -64,4 +77,4 @@ async def get_finding(request: Request, finding_id: str):
     row = await request.app.state.db.fetch_one("SELECT * FROM findings WHERE id = ?", (finding_id,))
     if not row:
         raise HTTPException(404, "Finding not found")
-    return {"finding": row}
+    return {"finding": _format_finding_row(row)}

@@ -49,6 +49,34 @@ CREATE TABLE IF NOT EXISTS stash (
     session_id TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS playbooks (
+    id TEXT PRIMARY KEY,
+    technology TEXT NOT NULL,
+    technique TEXT NOT NULL,
+    commands TEXT NOT NULL,
+    notes TEXT,
+    success_count INTEGER DEFAULT 1,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS playbooks_fts USING fts5(
+    technology, technique, commands, notes, content='playbooks', content_rowid='rowid'
+);
+
+CREATE TRIGGER IF NOT EXISTS playbooks_ai AFTER INSERT ON playbooks BEGIN
+  INSERT INTO playbooks_fts(rowid, technology, technique, commands, notes) VALUES (new.rowid, new.technology, new.technique, new.commands, new.notes);
+END;
+
+CREATE TRIGGER IF NOT EXISTS playbooks_ad AFTER DELETE ON playbooks BEGIN
+  INSERT INTO playbooks_fts(playbooks_fts, rowid, technology, technique, commands, notes) VALUES('delete', old.rowid, old.technology, old.technique, old.commands, old.notes);
+END;
+
+CREATE TRIGGER IF NOT EXISTS playbooks_au AFTER UPDATE ON playbooks BEGIN
+  INSERT INTO playbooks_fts(playbooks_fts, rowid, technology, technique, commands, notes) VALUES('delete', old.rowid, old.technology, old.technique, old.commands, old.notes);
+  INSERT INTO playbooks_fts(rowid, technology, technique, commands, notes) VALUES (new.rowid, new.technology, new.technique, new.commands, new.notes);
+END;
 """
 
 

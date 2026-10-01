@@ -48,10 +48,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/valinorintelligence/foxnode-aspm"
-Repository = "https://github.com/valinorintelligence/foxnode-aspm"
-Issues = "https://github.com/valinorintelligence/foxnode-aspm/issues"
-Documentation = "https://github.com/valinorintelligence/foxnode-aspm#readme"
+Homepage = "https://github.com/valinorintelligence/arcanum-core"
+Repository = "https://github.com/valinorintelligence/arcanum-core"
+Issues = "https://github.com/valinorintelligence/arcanum-core/issues"
+Documentation = "https://github.com/valinorintelligence/arcanum-core#readme"
 
 [project.optional-dependencies]
 full = [
