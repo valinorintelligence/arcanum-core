@@ -92,6 +92,15 @@ def test_nmap_syn_downgraded_and_pn_added():
     assert "-sS" not in repaired and "-sT" in repaired and "-Pn" in repaired
 
 
+def test_httpx_rewritten_to_projectdiscovery_binary():
+    # /usr/bin/httpx on the sandbox is the Python HTTP client (no -u); the PD
+    # pentest tool is 'httpx-toolkit'. The agent's httpx calls must target it.
+    assert _auto_repair_command("httpx -u http://x -tech-detect").startswith("httpx-toolkit ")
+    assert "-u" in _auto_repair_command("httpx x.com")  # bare target gets -u
+    assert _auto_repair_command("httpx x.com").startswith("httpx-toolkit -u ")
+    assert _auto_repair_command("httpx -l hosts.txt").startswith("httpx-toolkit -l ")
+
+
 def test_nmap_without_scan_type_forces_connect():
     # Reproduces the operator's failure: no scan type -> nmap defaults to SYN
     # (raw socket) which fails as nobody. Must inject -sT.

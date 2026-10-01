@@ -259,18 +259,27 @@ def _auto_repair_command(cmd: str) -> str:
             if target_arg:
                 cmd = f"subfinder -d {target_arg} {' '.join(other_args)}".strip()
 
-    elif binary == "httpx":
-        has_input_flag = any(p in ("-u", "-target", "-l", "-list") for p in [p.lower() for p in parts[1:]])
+    elif binary in ("httpx", "httpx-toolkit"):
+        # On the Kali sandbox, /usr/bin/httpx is the *Python* HTTP client (CLI
+        # "httpx [OPTIONS] URL", no -u -> "Error: No such option: -u"), while
+        # ProjectDiscovery's httpx is installed as 'httpx-toolkit'. Always target
+        # the PD binary so the agent's -u/-tech-detect/-status-code flags work.
+        rest = parts[1:]
+        has_input_flag = any(p.lower() in ("-u", "-target", "-l", "-list") for p in rest)
         if not has_input_flag:
             target_arg = None
             other_args = []
-            for p in parts[1:]:
+            for p in rest:
                 if not p.startswith("-") and target_arg is None:
                     target_arg = p
                 else:
                     other_args.append(p)
             if target_arg:
-                cmd = f"httpx -u {target_arg} {' '.join(other_args)}".strip()
+                cmd = f"httpx-toolkit -u {target_arg} {' '.join(other_args)}".strip()
+            else:
+                cmd = f"httpx-toolkit {' '.join(rest)}".strip()
+        else:
+            cmd = f"httpx-toolkit {' '.join(rest)}".strip()
 
     elif binary == "nuclei":
         has_input_flag = any(p in ("-u", "-target", "-l", "-list") for p in [p.lower() for p in parts[1:]])
