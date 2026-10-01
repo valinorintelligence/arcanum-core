@@ -4,7 +4,27 @@ import pytest_asyncio
 import tempfile
 from pathlib import Path
 from arcanum.core.database import Database
-from arcanum.core.playbooks import PlaybookManager
+from arcanum.core.playbooks import PlaybookManager, DEFAULT_PLAYBOOKS
+
+
+@pytest.mark.asyncio
+async def test_ensure_defaults_is_additive_and_idempotent(memory_db):
+    pm = PlaybookManager(memory_db)
+    # Pre-existing learned/old entry whose success_count must be preserved.
+    await pm.save("nginx", "403_forbidden_path_normalization_bypass", "curl x", "old")
+    await pm.save("nginx", "403_forbidden_path_normalization_bypass", "curl x", "old")  # count -> 2
+    before = (await memory_db.fetch_one(
+        "SELECT success_count FROM playbooks WHERE technique='403_forbidden_path_normalization_bypass'"))["success_count"]
+
+    added = await pm.ensure_defaults()
+    assert added == len(DEFAULT_PLAYBOOKS) - 1  # the pre-existing one is skipped
+    assert await pm.ensure_defaults() == 0       # idempotent
+    after = (await memory_db.fetch_one(
+        "SELECT success_count FROM playbooks WHERE technique='403_forbidden_path_normalization_bypass'"))["success_count"]
+    assert after == before                       # not inflated
+    # the expanded library is searchable
+    for q in ("git", "sqlmap", "graphql"):
+        assert await pm.search(q, limit=1)
 
 
 @pytest_asyncio.fixture

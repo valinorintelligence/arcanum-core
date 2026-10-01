@@ -45,11 +45,16 @@ async def lifespan(app: FastAPI):
     app.state.alert_engine = AlertEngine()
     app.state.report_engine = ReportEngine()
 
-    # Initialize Playbook KB
+    # Initialize Playbook KB (pre-seed proven techniques so the agent isn't
+    # cold-starting). ensure_defaults is idempotent and additive: it tops up any
+    # missing built-ins without touching learned entries.
     from ..core.playbooks import PlaybookManager
     pm = PlaybookManager(db)
     try:
-        await pm.seed_defaults_if_empty()
+        added = await pm.ensure_defaults()
+        if added:
+            import logging
+            logging.getLogger("arcanum").info(f"Playbooks: {added} técnica(s) padrão adicionada(s).")
     except Exception:
         pass
     app.state.playbook_mgr = pm

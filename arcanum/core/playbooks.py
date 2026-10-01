@@ -49,6 +49,100 @@ DEFAULT_PLAYBOOKS = [
         "commands": "nuclei -u TARGET -severity critical,high -rl 50",
         "notes": "Rate-limit (-rl) so fragile cloud/proxy targets don't go unresponsive mid-scan under thousands of connections.",
     },
+    # --- Recon ------------------------------------------------------------
+    {
+        "technology": "subfinder",
+        "technique": "passive_subdomain_enum",
+        "commands": "subfinder -d TARGET -all -silent -o /workspace/output/subdomains.txt",
+        "notes": "Passive OSINT subdomain enumeration (no direct traffic to the target).",
+    },
+    {
+        "technology": "dnsx",
+        "technique": "resolve_and_records",
+        "commands": "dnsx -l /workspace/output/subdomains.txt -a -resp -silent -o /workspace/output/dns.txt",
+        "notes": "Resolve discovered subdomains to live IPs and pull A/CNAME records.",
+    },
+    {
+        "technology": "katana",
+        "technique": "endpoint_crawl",
+        "commands": "katana -u https://TARGET -jc -silent -o /workspace/output/endpoints.txt",
+        "notes": "Crawl pages + JavaScript (-jc) to map endpoints, forms and hidden API routes.",
+    },
+    # --- Web discovery ----------------------------------------------------
+    {
+        "technology": "ffuf",
+        "technique": "directory_bruteforce",
+        "commands": "ffuf -u https://TARGET/FUZZ -w /opt/seclists/Discovery/Web-Content/common.txt -mc 200,204,301,302,307,401,403 -t 40 -o /workspace/output/ffuf.json",
+        "notes": "Content discovery with SecLists common wordlist; -mc filters interesting status codes.",
+    },
+    {
+        "technology": "feroxbuster",
+        "technique": "recursive_content_discovery",
+        "commands": "feroxbuster -u https://TARGET -w /opt/seclists/Discovery/Web-Content/raft-medium-directories.txt -d 2 -s 200,301,302,401,403 --silent",
+        "notes": "Recursive directory discovery (depth 2) — good for finding nested admin/api paths.",
+    },
+    {
+        "technology": "exposure",
+        "technique": "sensitive_files_probe",
+        "commands": "curl -k -s -o /dev/null -w '%{http_code} .git/HEAD\\n' https://TARGET/.git/HEAD\ncurl -k -s -o /dev/null -w '%{http_code} .env\\n' https://TARGET/.env\ncurl -k -s -o /dev/null -w '%{http_code} .DS_Store\\n' https://TARGET/.DS_Store",
+        "notes": "Checks for exposed source control, environment files and metadata (common misconfig leaks).",
+    },
+    {
+        "technology": "api",
+        "technique": "openapi_swagger_discovery",
+        "commands": "for p in /swagger.json /openapi.json /api-docs /v2/api-docs /swagger-ui.html; do curl -k -s -o /dev/null -w \"%{http_code} $p\\n\" \"https://TARGET$p\"; done",
+        "notes": "Locate API documentation that reveals endpoints, parameters and auth schemes.",
+    },
+    {
+        "technology": "http_headers",
+        "technique": "security_header_review",
+        "commands": "curl -k -s -I https://TARGET",
+        "notes": "Review for missing CSP / X-Frame-Options / HSTS / X-Content-Type-Options and Server banner disclosure.",
+    },
+    {
+        "technology": "cors",
+        "technique": "cors_misconfig_probe",
+        "commands": "curl -k -s -I -H 'Origin: https://evil.example' https://TARGET | grep -i 'access-control-allow'",
+        "notes": "If the origin is reflected with Allow-Credentials:true, CORS is misconfigured.",
+    },
+    # --- Technology-specific ---------------------------------------------
+    {
+        "technology": "graphql",
+        "technique": "introspection_query",
+        "commands": "curl -k -s -X POST -H 'Content-Type: application/json' -d '{\"query\":\"{__schema{types{name}}}\"}' https://TARGET/graphql",
+        "notes": "If introspection is enabled it dumps the full schema (types, queries, mutations).",
+    },
+    {
+        "technology": "jwt",
+        "technique": "none_algorithm_and_weak_secret",
+        "commands": "jwt_tool <TOKEN> -X a\njwt_tool <TOKEN> -C -d /opt/seclists/Passwords/jwt.secrets.list",
+        "notes": "Test the 'none' algorithm bypass and brute-force weak HS256 signing secrets.",
+    },
+    {
+        "technology": "wordpress",
+        "technique": "wpscan_enumeration",
+        "commands": "wpscan --url https://TARGET --enumerate vp,u --random-user-agent --no-banner",
+        "notes": "Enumerate vulnerable plugins (vp) and users (u). Add --api-token for CVE data.",
+    },
+    # --- Safe vulnerability confirmation ---------------------------------
+    {
+        "technology": "sqlmap",
+        "technique": "sqli_detection_batch",
+        "commands": "sqlmap -u 'https://TARGET/path?id=1' --batch --level 2 --risk 1 --random-agent",
+        "notes": "Non-destructive SQLi detection (level 2/risk 1). Escalate only with authorization.",
+    },
+    {
+        "technology": "dalfox",
+        "technique": "xss_detection",
+        "commands": "dalfox url https://TARGET --silence --skip-bav",
+        "notes": "Reflected/stored XSS detection on parameters discovered during crawl.",
+    },
+    {
+        "technology": "default_creds",
+        "technique": "exposed_panels_and_default_logins",
+        "commands": "nuclei -u TARGET -tags exposure,default-login,panel -rl 50",
+        "notes": "Detect exposed admin panels and services still using default credentials.",
+    },
 ]
 
 
@@ -206,3 +300,28 @@ class PlaybookManager:
             )
             seeded += 1
         return seeded
+
+    async def ensure_defaults(self) -> int:
+        """Idempotently insert any missing default playbooks without disturbing
+        existing rows. Unlike seed_defaults_if_empty this runs even when the KB
+        already has entries (e.g. learned ones), so expanding the built-in
+        library reaches existing installs on the next boot — and it does NOT
+        bump success_count (no inflation) nor overwrite what the agent learned."""
+        now = datetime.now(timezone.utc).isoformat()
+        added = 0
+        for item in DEFAULT_PLAYBOOKS:
+            existing = await self.db.fetch_one(
+                "SELECT id FROM playbooks WHERE LOWER(technology)=LOWER(?) AND LOWER(technique)=LOWER(?)",
+                (item["technology"].strip(), item["technique"].strip()),
+            )
+            if existing:
+                continue
+            playbook_id = f"pb-{uuid.uuid4().hex[:8]}"
+            await self.db.execute(
+                """INSERT INTO playbooks (id, technology, technique, commands, notes, success_count, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, 1, ?, ?)""",
+                (playbook_id, item["technology"].strip().lower(), item["technique"].strip(),
+                 item["commands"].strip(), item["notes"].strip(), now, now),
+            )
+            added += 1
+        return added
