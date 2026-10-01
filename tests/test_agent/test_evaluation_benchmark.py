@@ -30,14 +30,15 @@ def test_eval_auto_repair_subfinder():
 
 
 def test_eval_auto_repair_httpx():
+    # 'httpx' is rewritten to 'httpx-toolkit' (the ProjectDiscovery binary),
+    # since /usr/bin/httpx on the sandbox is the Python HTTP client (no -u).
     # Target without -u
-    cmd = "httpx example.com"
-    repaired = _auto_repair_command(cmd)
-    assert repaired == "httpx -u example.com"
+    repaired = _auto_repair_command("httpx example.com")
+    assert repaired == "httpx-toolkit -u example.com"
 
-    # Already has -u
+    # Already has -u: binary still normalized to httpx-toolkit
     cmd_u = "httpx -u https://example.com -status-code"
-    assert _auto_repair_command(cmd_u) == "httpx -u https://example.com -status-code"
+    assert _auto_repair_command(cmd_u) == "httpx-toolkit -u https://example.com -status-code"
 
 
 def test_eval_auto_repair_nuclei():
