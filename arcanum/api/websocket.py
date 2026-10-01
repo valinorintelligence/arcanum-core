@@ -75,6 +75,9 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                         continue
                     # Create a basic engine (sandbox/browser setup would be more complex in production)
                     from ..agent.tools import ToolExecutor
+                    from ..core.alerts import AlertEngine
+                    # Per-session alert engine so alerts from different operations
+                    # don't bleed into each other (the app-level one was shared).
                     tool_executor = ToolExecutor(
                         sandbox=getattr(app.state, "sandbox", None),
                         browser=getattr(app.state, "browser", None),
@@ -82,7 +85,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                         db=app.state.db,
                         cve_kb=getattr(app.state, "cve_kb", None),
                         stash_mgr=getattr(app.state, "stash_mgr", None),
-                        alert_engine=getattr(app.state, "alert_engine", None),
+                        alert_engine=AlertEngine(),
                         session_id=session.get("id"),
                     )
                     engine = AgentEngine(

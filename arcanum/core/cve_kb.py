@@ -65,14 +65,40 @@ class CVEKnowledgeBase:
         await self._db.commit()
 
     async def search(self, query: str, limit: int = 10) -> list[CVEEntry]:
-        """Full-text search across CVEs."""
+        """Full-text search across CVEs.
+
+        Raw user input can contain FTS5 syntax ('"', 'AND', 'NEAR/', '(') that
+        raises OperationalError — previously an unhandled 500/DoS on
+        /api/cve/search. We sanitize to a safe prefix query and fall back to a
+        LIKE scan if FTS still rejects it.
+        """
+        q = (query or "").strip()
+        if not q:
+            return []
+        # Strip FTS operator characters, then build a safe quoted-term query.
+        import re
+        terms = re.findall(r"[A-Za-z0-9._\-]+", q)
+        try:
+            if terms:
+                fts = " ".join(f'"{t}"' for t in terms)
+                cursor = await self._db.execute(
+                    """SELECT c.* FROM cves c
+                       JOIN cves_fts f ON c.rowid = f.rowid
+                       WHERE cves_fts MATCH ?
+                       ORDER BY rank
+                       LIMIT ?""",
+                    (fts, limit),
+                )
+                rows = await cursor.fetchall()
+                if rows:
+                    return [self._row_to_entry(row) for row in rows]
+        except Exception:
+            pass  # fall through to LIKE
+
+        like = f"%{q}%"
         cursor = await self._db.execute(
-            """SELECT c.* FROM cves c
-               JOIN cves_fts f ON c.rowid = f.rowid
-               WHERE cves_fts MATCH ?
-               ORDER BY rank
-               LIMIT ?""",
-            (query, limit),
+            "SELECT * FROM cves WHERE id LIKE ? OR description LIKE ? ORDER BY cvss_score DESC LIMIT ?",
+            (like, like, limit),
         )
         rows = await cursor.fetchall()
         return [self._row_to_entry(row) for row in rows]

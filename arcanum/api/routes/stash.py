@@ -1,7 +1,7 @@
 """Stash endpoints."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from ...core.models import StashType
@@ -66,7 +66,7 @@ async def add_stash(request: Request, body: AddStashRequest):
 async def get_stash(request: Request, item_id: str):
     item = await request.app.state.stash_mgr.get(item_id)
     if not item:
-        return {"error": "Not found"}, 404
+        raise HTTPException(404, "Not found")
     return {
         "item": {
             "id": item.id,
@@ -81,7 +81,7 @@ async def get_stash(request: Request, item_id: str):
 async def pull_stash(request: Request, item_id: str, session_id: str):
     item = await request.app.state.stash_mgr.pull(item_id, session_id)
     if not item:
-        return {"error": "Not found"}, 404
+        raise HTTPException(404, "Not found")
     return {"status": "pulled", "item_id": item_id}
 
 
