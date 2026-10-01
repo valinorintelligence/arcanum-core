@@ -341,6 +341,11 @@ class ToolExecutor:
         self.stash_mgr = stash_mgr
         self.alert_engine = alert_engine
         self.session_id = session_id
+        try:
+            from ..core.config import get_config
+            self.VULN_SIMILARITY_THRESHOLD = get_config().vuln_similarity_threshold
+        except Exception:
+            pass  # keep class default
         self._findings: list[dict] = []
         self.playbook_mgr = None
         if self.db:
@@ -385,7 +390,12 @@ class ToolExecutor:
 
     async def _handle_execute(self, command: str, timeout: int = 300) -> dict:
         command = _auto_repair_command(command)
-        timeout = min(timeout, 900)  # Cap at 15 minutes
+        try:
+            from ..core.config import get_config
+            cap = get_config().command_timeout
+        except Exception:
+            cap = 900
+        timeout = min(timeout, cap)  # respect ARCANUM_COMMAND_TIMEOUT
         if self.sandbox is None:
             # SECURITY: never fall back to running attacker/LLM-influenced
             # commands directly on the host. Refuse instead. The previous

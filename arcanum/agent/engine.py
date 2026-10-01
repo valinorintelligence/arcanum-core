@@ -76,7 +76,9 @@ class AgentEngine:
         self.messages.append({"role": "user", "content": prompt_with_context})
 
         # Deep recon autostart: bare domain triggers full pipeline
-        if self.mode == MODE_AUTOPILOT and self._is_bare_domain(user_input):
+        from ..core.config import get_config
+        if (self.mode == MODE_AUTOPILOT and get_config().deep_recon_autostart
+                and self._is_bare_domain(user_input)):
             expanded = self._expand_to_full_recon(user_input)
             self.messages[-1]["content"] = expanded
 
@@ -214,6 +216,14 @@ class AgentEngine:
                         requires_approval = tool_name not in ("read_memory", "query_playbook")
                     elif self.mode == MODE_COPILOT:
                         requires_approval = risk in ("MEDIUM", "HIGH")
+                    elif self.mode == MODE_AUTOPILOT:
+                        # Even in autopilot, destructive/high-risk tooling
+                        # (metasploit, hydra, sqlmap, --risk 3...) requires
+                        # explicit opt-in via ARCANUM_ALLOW_DESTRUCTIVE_TESTING;
+                        # otherwise pause for operator approval.
+                        from ..core.config import get_config
+                        if risk == "HIGH" and not get_config().allow_destructive_testing:
+                            requires_approval = True
 
                     if requires_approval:
                         self.pending_action = {"tool": tool_name, "arguments": arguments}
