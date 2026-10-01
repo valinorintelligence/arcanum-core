@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Arcanum Core</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
@@ -116,24 +117,25 @@
   <header class="sticky top-0 z-50 bg-surface-900/95 backdrop-blur border-b border-gray-800">
     <div class="max-w-[1920px] mx-auto flex items-center justify-between px-4 h-14">
       <!-- Logo -->
-      <div class="flex items-center gap-3 cursor-pointer" @click="currentView = 'dashboard'; currentSession = null">
+      <div class="flex items-center gap-3 cursor-pointer" @click="currentView = 'dashboard'; currentSession = null" title="Painel Geral: Visualizar operações, alvos e estatísticas">
         <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-cyan-500 to-emerald-500 flex items-center justify-center">
           <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/>
           </svg>
         </div>
         <span class="text-lg font-bold tracking-wider text-white">ARCANUM <span class="text-cyan-400">CORE</span></span>
-        <span class="text-[10px] font-mono text-gray-500 bg-gray-800 px-1.5 py-0.5 rounded">v3.0.0</span>
+        <span class="text-[10px] font-mono text-gray-500 bg-gray-800 px-1.5 py-0.5 rounded" title="Versão da plataforma">v3.0.0</span>
       </div>
 
       <!-- Nav -->
       <nav class="hidden md:flex items-center gap-1">
-        <template x-for="v in ['dashboard','findings','stash','reports','cve']" :key="v">
+        <template x-for="item in navItems" :key="item.id">
           <button
-            @click="currentView = v; if(v !== 'session') currentSession = null"
-            :class="currentView === v ? 'bg-gray-800 text-cyan-400' : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/50'"
-            class="px-3 py-1.5 rounded-md text-sm font-medium capitalize transition-colors"
-            x-text="v === 'cve' ? 'CVE Search' : v"
+            @click="currentView = item.id; if(item.id !== 'session') currentSession = null; if(item.id === 'playbooks') fetchPlaybooks();"
+            :class="currentView === item.id ? 'bg-gray-800 text-cyan-400' : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/50'"
+            class="px-3 py-1.5 rounded-md text-sm font-medium transition-colors"
+            :title="item.tooltip"
+            x-text="item.label"
           ></button>
         </template>
       </nav>
@@ -141,24 +143,24 @@
       <!-- Actions -->
       <div class="flex items-center gap-2">
         <!-- New Op -->
-        <button @click="showNewOp = true" class="flex items-center gap-1.5 bg-cyan-600 hover:bg-cyan-500 text-white text-sm font-medium px-3 py-1.5 rounded-md transition-colors">
+        <button @click="showNewOp = true" title="Criar nova operação de pentest / reconhecimento definindo alvo e modo" class="flex items-center gap-1.5 bg-cyan-600 hover:bg-cyan-500 text-white text-sm font-medium px-3 py-1.5 rounded-md transition-colors shadow-sm">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg>
-          New Op
+          + Nova Op
         </button>
         <!-- Mode -->
-        <select x-model="globalMode" class="bg-gray-800 border border-gray-700 text-sm text-gray-300 rounded-md px-2 py-1.5 focus:ring-1 focus:ring-cyan-500 focus:border-cyan-500">
-          <option value="autopilot">Autopilot</option>
-          <option value="copilot">Copilot</option>
-          <option value="manual">Manual</option>
+        <select x-model="globalMode" title="Modo de Operação Padrão: Define o nível de autonomia do agente" class="bg-gray-800 border border-gray-700 text-sm text-gray-300 rounded-md px-2 py-1.5 focus:ring-1 focus:ring-cyan-500 focus:border-cyan-500">
+          <option value="autopilot" title="Autônomo: O agente decide e executa ferramentas sem pedir aprovação intermediária">Autopilot (Autônomo)</option>
+          <option value="copilot" title="Assistente: O agente sugere ações de risco médio/alto e aguarda sua aprovação">Copilot (Assistente)</option>
+          <option value="manual" title="Manual: O agente executa ferramentas somente sob comando explícito do operador">Manual (Operador)</option>
         </select>
         <!-- Settings -->
-        <button @click="showSettings = !showSettings" class="p-1.5 text-gray-400 hover:text-gray-200 hover:bg-gray-800 rounded-md transition-colors">
+        <button @click="showSettings = !showSettings" title="Configurações de conexão: endpoints da API REST e WebSocket" class="p-1.5 text-gray-400 hover:text-gray-200 hover:bg-gray-800 rounded-md transition-colors">
           <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><circle cx="12" cy="12" r="3"/></svg>
         </button>
         <!-- Connection indicator -->
-        <div class="flex items-center gap-1.5 text-xs text-gray-500">
-          <div :class="wsConnected ? 'bg-emerald-500' : 'bg-red-500'" class="w-2 h-2 rounded-full"></div>
-          <span x-text="wsConnected ? 'Live' : 'Offline'"></span>
+        <div class="flex items-center gap-1.5 text-xs" :title="wsConnected ? 'Conectado à sessão em tempo real via WebSocket' : (serverOnline ? 'Servidor REST Arcanum Core online' : 'Servidor desconectado')">
+          <div :class="wsConnected ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)]' : (serverOnline ? 'bg-emerald-500' : 'bg-red-500')" class="w-2 h-2 rounded-full"></div>
+          <span :class="wsConnected ? 'text-emerald-400 font-medium' : (serverOnline ? 'text-gray-300' : 'text-red-400')" x-text="wsConnected ? 'Sessão Ativa' : (serverOnline ? 'Sistema Online' : 'Desconectado')"></span>
         </div>
       </div>
     </div>
@@ -173,78 +175,78 @@
       <!-- Stats -->
       <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <!-- Active Ops -->
-        <div class="bg-surface-900 border border-gray-800 rounded-xl p-4 hover:border-cyan-800 transition-colors">
+        <div class="bg-surface-900 border border-gray-800 rounded-xl p-4 hover:border-cyan-800 transition-colors" title="Total de operações cadastradas no sistema e quantas estão em execução ativa">
           <div class="flex items-center justify-between mb-2">
-            <span class="text-xs text-gray-500 uppercase tracking-wider">Active Ops</span>
+            <span class="text-xs text-gray-500 uppercase tracking-wider">Operações Ativas</span>
             <div class="w-8 h-8 rounded-lg bg-cyan-500/10 flex items-center justify-center">
               <svg class="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
             </div>
           </div>
           <div class="text-2xl font-bold text-white" x-text="stats.ops"></div>
-          <div class="text-xs text-gray-500 mt-1" x-text="sessions.filter(s => s.status === 'running').length + ' running'"></div>
+          <div class="text-xs text-gray-500 mt-1" x-text="sessions.filter(s => s.status === 'running').length + ' em execução'"></div>
         </div>
         <!-- Targets -->
-        <div class="bg-surface-900 border border-gray-800 rounded-xl p-4 hover:border-cyan-800 transition-colors">
+        <div class="bg-surface-900 border border-gray-800 rounded-xl p-4 hover:border-cyan-800 transition-colors" title="Total de alvos únicos sob monitoramento ou avaliação (domínios, IPs ou faixas)">
           <div class="flex items-center justify-between mb-2">
-            <span class="text-xs text-gray-500 uppercase tracking-wider">Targets</span>
+            <span class="text-xs text-gray-500 uppercase tracking-wider">Alvos Únicos</span>
             <div class="w-8 h-8 rounded-lg bg-emerald-500/10 flex items-center justify-center">
               <svg class="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
             </div>
           </div>
           <div class="text-2xl font-bold text-white" x-text="stats.targets"></div>
-          <div class="text-xs text-gray-500 mt-1">unique targets</div>
+          <div class="text-xs text-gray-500 mt-1">alvos registrados</div>
         </div>
         <!-- Findings -->
-        <div class="bg-surface-900 border border-gray-800 rounded-xl p-4 hover:border-cyan-800 transition-colors">
+        <div class="bg-surface-900 border border-gray-800 rounded-xl p-4 hover:border-cyan-800 transition-colors" title="Total de vulnerabilidades descobertas divididas por severidade">
           <div class="flex items-center justify-between mb-2">
-            <span class="text-xs text-gray-500 uppercase tracking-wider">Findings</span>
+            <span class="text-xs text-gray-500 uppercase tracking-wider">Vulnerabilidades</span>
             <div class="w-8 h-8 rounded-lg bg-red-500/10 flex items-center justify-center">
               <svg class="w-4 h-4 text-red-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z"/></svg>
             </div>
           </div>
           <div class="text-2xl font-bold text-white" x-text="findings.length"></div>
           <div class="flex gap-2 mt-1">
-            <span class="text-[10px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-400" x-text="(stats.findings.critical || 0) + ' C'"></span>
-            <span class="text-[10px] px-1.5 py-0.5 rounded bg-orange-500/20 text-orange-400" x-text="(stats.findings.high || 0) + ' H'"></span>
-            <span class="text-[10px] px-1.5 py-0.5 rounded bg-yellow-500/20 text-yellow-400" x-text="(stats.findings.medium || 0) + ' M'"></span>
-            <span class="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400" x-text="(stats.findings.low || 0) + ' L'"></span>
+            <span class="text-[10px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-400 font-bold" title="Crítica (CVSS 9.0-10.0)" x-text="(stats.findings.critical || 0) + ' C'"></span>
+            <span class="text-[10px] px-1.5 py-0.5 rounded bg-orange-500/20 text-orange-400 font-bold" title="Alta (CVSS 7.0-8.9)" x-text="(stats.findings.high || 0) + ' A'"></span>
+            <span class="text-[10px] px-1.5 py-0.5 rounded bg-yellow-500/20 text-yellow-400 font-bold" title="Média (CVSS 4.0-6.9)" x-text="(stats.findings.medium || 0) + ' M'"></span>
+            <span class="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400 font-bold" title="Baixa (CVSS 0.1-3.9)" x-text="(stats.findings.low || 0) + ' B'"></span>
           </div>
         </div>
         <!-- Stash -->
-        <div class="bg-surface-900 border border-gray-800 rounded-xl p-4 hover:border-cyan-800 transition-colors">
+        <div class="bg-surface-900 border border-gray-800 rounded-xl p-4 hover:border-cyan-800 transition-colors" title="Artefatos sensíveis (credenciais, hashes, tokens, chaves) salvos com proteção no cofre">
           <div class="flex items-center justify-between mb-2">
-            <span class="text-xs text-gray-500 uppercase tracking-wider">Stash Items</span>
+            <span class="text-xs text-gray-500 uppercase tracking-wider">Itens no Cofre</span>
             <div class="w-8 h-8 rounded-lg bg-yellow-500/10 flex items-center justify-center">
               <svg class="w-4 h-4 text-yellow-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"/></svg>
             </div>
           </div>
           <div class="text-2xl font-bold text-white" x-text="stats.stash"></div>
-          <div class="text-xs text-gray-500 mt-1">artifacts stored</div>
+          <div class="text-xs text-gray-500 mt-1">artefatos guardados</div>
         </div>
       </div>
 
       <!-- Operations Table -->
       <div class="bg-surface-900 border border-gray-800 rounded-xl overflow-hidden">
         <div class="px-4 py-3 border-b border-gray-800 flex items-center justify-between">
-          <h2 class="text-sm font-semibold text-gray-300 uppercase tracking-wider">Operations</h2>
+          <h2 class="text-sm font-semibold text-gray-300 uppercase tracking-wider" title="Lista de todas as operações e sessões cadastradas no sistema">Operações Registradas</h2>
           <span class="text-xs text-gray-500" x-text="sessions.length + ' total'"></span>
         </div>
         <div class="overflow-x-auto">
           <table class="w-full text-sm">
             <thead>
               <tr class="text-left text-xs text-gray-500 uppercase tracking-wider border-b border-gray-800">
-                <th class="px-4 py-2.5">Status</th>
-                <th class="px-4 py-2.5">Name</th>
-                <th class="px-4 py-2.5">Target</th>
-                <th class="px-4 py-2.5">Mode</th>
-                <th class="px-4 py-2.5">Findings</th>
-                <th class="px-4 py-2.5">Updated</th>
-                <th class="px-4 py-2.5">Actions</th>
+                <th class="px-4 py-2.5" title="Estado da operação: Criada, Executando, Pausada ou Concluída">Status</th>
+                <th class="px-4 py-2.5" title="Nome identificador único da sessão de segurança">Nome</th>
+                <th class="px-4 py-2.5" title="Domínio ou endereço IP sob avaliação">Alvo</th>
+                <th class="px-4 py-2.5" title="Modo de operação: Autopilot (autônomo), Copilot (com aprovação) ou Manual">Modo</th>
+                <th class="px-4 py-2.5" title="Total de vulnerabilidades descobertas nesta sessão">Falhas</th>
+                <th class="px-4 py-2.5" title="Tempo decorrido desde a última atividade nesta operação">Atualizado</th>
+                <th class="px-4 py-2.5" title="Ações disponíveis para gerenciar esta operação">Ações</th>
               </tr>
             </thead>
             <tbody>
               <template x-for="s in sessions" :key="s.id">
-                <tr class="border-b border-gray-800/50 hover:bg-gray-800/30 cursor-pointer transition-colors" @click="openSession(s)">
+                <tr class="border-b border-gray-800/50 hover:bg-gray-800/30 cursor-pointer transition-colors" @click="openSession(s)" title="Clique para abrir e controlar esta operação">
                   <td class="px-4 py-3">
                     <div class="flex items-center gap-2">
                       <div :class="{
@@ -253,18 +255,18 @@
                         'bg-gray-500': s.status === 'created',
                         'bg-blue-500': s.status === 'complete'
                       }" class="w-2 h-2 rounded-full"></div>
-                      <span class="text-xs capitalize" :class="{
+                      <span class="text-xs capitalize font-medium" :class="{
                         'text-emerald-400': s.status === 'running',
                         'text-yellow-400': s.status === 'paused',
                         'text-gray-400': s.status === 'created',
                         'text-blue-400': s.status === 'complete'
-                      }" x-text="s.status"></span>
+                      }" x-text="getStatusLabel(s.status)"></span>
                     </div>
                   </td>
                   <td class="px-4 py-3 font-medium text-white" x-text="s.name"></td>
                   <td class="px-4 py-3 font-mono text-xs text-cyan-400" x-text="s.target || '-'"></td>
                   <td class="px-4 py-3">
-                    <span class="text-xs px-2 py-0.5 rounded-full" :class="{
+                    <span class="text-xs px-2 py-0.5 rounded-full capitalize" :class="{
                       'bg-red-500/20 text-red-400': s.mode === 'autopilot',
                       'bg-yellow-500/20 text-yellow-400': s.mode === 'copilot',
                       'bg-blue-500/20 text-blue-400': s.mode === 'manual'
@@ -274,10 +276,10 @@
                   <td class="px-4 py-3 text-xs text-gray-500" x-text="formatTime(s.updated_at)"></td>
                   <td class="px-4 py-3" @click.stop>
                     <div class="flex items-center gap-1">
-                      <button @click="openSession(s)" class="p-1 text-gray-500 hover:text-cyan-400 transition-colors" title="Open">
+                      <button @click="openSession(s)" class="p-1 text-gray-500 hover:text-cyan-400 transition-colors" title="Abrir console e painel de controle desta operação">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
                       </button>
-                      <button @click="deleteSession(s.name)" class="p-1 text-gray-500 hover:text-red-400 transition-colors" title="Delete">
+                      <button @click="deleteSession(s.name)" class="p-1 text-gray-500 hover:text-red-400 transition-colors" title="Excluir permanentemente esta operação e seus dados locais">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
                       </button>
                     </div>
@@ -285,7 +287,7 @@
                 </tr>
               </template>
               <tr x-show="sessions.length === 0">
-                <td colspan="7" class="px-4 py-8 text-center text-gray-600">No operations yet. Click <span class="text-cyan-400">+ New Op</span> to begin.</td>
+                <td colspan="7" class="px-4 py-8 text-center text-gray-600">Nenhuma operação criada ainda. Clique em <span class="text-cyan-400 font-medium">+ Nova Op</span> para iniciar.</td>
               </tr>
             </tbody>
           </table>
@@ -295,18 +297,18 @@
       <!-- Recent Findings -->
       <div class="bg-surface-900 border border-gray-800 rounded-xl overflow-hidden">
         <div class="px-4 py-3 border-b border-gray-800">
-          <h2 class="text-sm font-semibold text-gray-300 uppercase tracking-wider">Recent Findings</h2>
+          <h2 class="text-sm font-semibold text-gray-300 uppercase tracking-wider" title="Últimas falhas de segurança detectadas pelo agente Arcanum">Vulnerabilidades Recentes</h2>
         </div>
         <div class="divide-y divide-gray-800/50">
           <template x-for="f in findings.slice(0, 10)" :key="f.id">
-            <div class="px-4 py-3 hover:bg-gray-800/30 transition-colors flex items-center gap-3">
-              <span class="text-[10px] font-bold uppercase px-2 py-0.5 rounded" :class="severityClass(f.severity)" x-text="f.severity || 'info'"></span>
+            <div class="px-4 py-3 hover:bg-gray-800/30 transition-colors flex items-center gap-3" :title="'Vulnerabilidade: ' + f.title">
+              <span class="text-[10px] font-bold uppercase px-2 py-0.5 rounded" :class="severityClass(f.severity)" x-text="getSeverityLabel(f.severity)"></span>
               <span class="text-sm text-white flex-1 truncate" x-text="f.title"></span>
-              <span class="text-xs font-mono text-gray-500 truncate max-w-[200px]" x-text="(f.affected && f.affected[0]) || ''"></span>
-              <span class="text-xs text-gray-600" x-text="f.session_id ? f.session_id.slice(0, 8) : ''"></span>
+              <span class="text-xs font-mono text-gray-500 truncate max-w-[200px]" x-text="formatAffected(f.affected)" title="Alvo ou URL afetada"></span>
+              <span class="text-xs text-gray-600" x-text="f.session_id ? f.session_id.slice(0, 8) : ''" title="Identificador da sessão"></span>
             </div>
           </template>
-          <div x-show="findings.length === 0" class="px-4 py-8 text-center text-gray-600">No findings discovered yet.</div>
+          <div x-show="findings.length === 0" class="px-4 py-8 text-center text-gray-600">Nenhuma vulnerabilidade descoberta até o momento.</div>
         </div>
       </div>
     </div>
@@ -317,24 +319,24 @@
     <div x-show="currentView === 'session' && currentSession" x-cloak class="flex flex-col h-[calc(100vh-56px)] fade-in">
       <!-- Session Top Bar -->
       <div class="flex items-center gap-3 px-4 py-2 bg-surface-900 border-b border-gray-800">
-        <button @click="currentView = 'dashboard'; currentSession = null" class="text-gray-500 hover:text-gray-300 transition-colors">
+        <button @click="currentView = 'dashboard'; currentSession = null" title="Voltar para o Painel Geral de Operações" class="text-gray-500 hover:text-gray-300 transition-colors">
           <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
         </button>
-        <span class="text-sm font-semibold text-white" x-text="currentSession?.name"></span>
-        <span class="text-xs font-mono text-cyan-400" x-text="currentSession?.target || ''"></span>
-        <span class="text-xs px-2 py-0.5 rounded-full" :class="{
+        <span class="text-sm font-semibold text-white" x-text="currentSession?.name" title="Nome identificador da operação atual"></span>
+        <span class="text-xs font-mono text-cyan-400" x-text="currentSession?.target || ''" title="Alvo configurado para esta sessão"></span>
+        <span class="text-xs px-2 py-0.5 rounded-full capitalize" :class="{
           'bg-red-500/20 text-red-400': currentSession?.mode === 'autopilot',
           'bg-yellow-500/20 text-yellow-400': currentSession?.mode === 'copilot',
           'bg-blue-500/20 text-blue-400': currentSession?.mode === 'manual'
-        }" x-text="currentSession?.mode"></span>
-        <div class="flex items-center gap-1.5 ml-auto">
+        }" x-text="'Modo: ' + currentSession?.mode" title="Modo de autonomia desta sessão"></span>
+        <div class="flex items-center gap-1.5 ml-auto" title="Status de execução da sessão">
           <div :class="{
             'bg-emerald-500': currentSession?.status === 'running',
             'bg-yellow-500': currentSession?.status === 'paused',
             'bg-gray-500': currentSession?.status === 'created',
             'bg-blue-500': currentSession?.status === 'complete'
           }" class="w-2 h-2 rounded-full"></div>
-          <span class="text-xs text-gray-400 capitalize" x-text="currentSession?.status"></span>
+          <span class="text-xs text-gray-400 capitalize" x-text="getStatusLabel(currentSession?.status)"></span>
         </div>
       </div>
 
@@ -342,19 +344,23 @@
       <div class="flex items-center gap-0 px-4 bg-surface-900 border-b border-gray-800 overflow-x-auto">
         <template x-for="tab in sessionTabs" :key="tab">
           <button
-            @click="activeTab = tab"
+            @click="activeTab = tab; if(tab === 'wiki') fetchSessionWiki();"
             :class="activeTab === tab ? 'text-cyan-400 border-b-2 border-cyan-400 bg-gray-800/30' : 'text-gray-500 hover:text-gray-300 border-b-2 border-transparent'"
-            class="px-3 py-2 text-xs font-medium uppercase tracking-wider transition-colors whitespace-nowrap"
-            x-text="tab"
-          ></button>
+            class="px-3 py-2 text-xs font-medium uppercase tracking-wider transition-colors whitespace-nowrap flex items-center gap-1.5"
+            :title="getTabTooltip(tab)"
+          >
+            <span x-text="getTabLabel(tab)"></span>
+            <span x-show="tab === 'wiki'" class="w-1.5 h-1.5 rounded-full bg-cyan-400" title="Memória viva ativa"></span>
+          </button>
         </template>
       </div>
 
       <!-- Session Content -->
       <div class="flex flex-1 overflow-hidden">
-        <!-- Left: Console / Output (70%) -->
+        <!-- Left: Console / Output or Wiki (70%) -->
         <div class="flex-[7] flex flex-col border-r border-gray-800 min-w-0">
-          <div class="flex-1 overflow-y-auto p-4 space-y-1 font-mono text-xs" id="console-output">
+          <!-- Terminal Console Output (activeTab !== 'wiki') -->
+          <div x-show="activeTab !== 'wiki'" class="flex-1 overflow-y-auto p-4 space-y-1 font-mono text-xs" id="console-output">
             <template x-for="(msg, idx) in messages" :key="idx">
               <div class="console-line fade-in" :class="{
                 'text-gray-400': msg.type === 'system',
@@ -370,8 +376,69 @@
                 <span x-text="msg.content"></span>
               </div>
             </template>
+            <div x-show="agentBusy" class="flex items-center gap-2 py-2 px-1 text-cyan-400 font-mono text-xs">
+              <svg class="animate-spin w-3.5 h-3.5 text-cyan-400" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+              </svg>
+              <span class="animate-pulse">Agente Arcanum processando (inferência e raciocínio do modelo local em andamento)...</span>
+            </div>
             <div x-show="messages.length === 0" class="text-gray-600 text-center py-8">
-              Session connected. Type a command or let Arcanum work autonomously.
+              Sessão conectada. Digite uma instrução em português, faça perguntas ou ordene um teste ao Arcanum.
+            </div>
+          </div>
+
+          <!-- Wiki / Living Memory (activeTab === 'wiki') -->
+          <div x-show="activeTab === 'wiki'" x-cloak class="flex-1 flex flex-col overflow-hidden bg-surface-950">
+            <!-- Wiki Sub-bar -->
+            <div class="flex items-center justify-between px-4 py-2 bg-surface-900 border-b border-gray-800 text-xs">
+              <div class="flex items-center gap-2">
+                <button 
+                  @click="activeWikiSection = 'target_map'"
+                  :class="activeWikiSection === 'target_map' ? 'bg-cyan-600 text-white font-medium' : 'bg-gray-800 text-gray-400 hover:text-gray-200'"
+                  class="px-2.5 py-1 rounded text-xs transition-colors"
+                  title="TARGET_MAP.md: Mapa estruturado de hosts, portas abertas e serviços identificados"
+                >
+                  TARGET_MAP.md (Topologia & Portas)
+                </button>
+                <button 
+                  @click="activeWikiSection = 'attack_surface'"
+                  :class="activeWikiSection === 'attack_surface' ? 'bg-cyan-600 text-white font-medium' : 'bg-gray-800 text-gray-400 hover:text-gray-200'"
+                  class="px-2.5 py-1 rounded text-xs transition-colors"
+                  title="ATTACK_SURFACE.md: Superfície de ataque externa, endpoints e vetores de risco"
+                >
+                  ATTACK_SURFACE.md (Superfície de Ataque)
+                </button>
+                <button 
+                  @click="activeWikiSection = 'operation_log'"
+                  :class="activeWikiSection === 'operation_log' ? 'bg-cyan-600 text-white font-medium' : 'bg-gray-800 text-gray-400 hover:text-gray-200'"
+                  class="px-2.5 py-1 rounded text-xs transition-colors"
+                  title="OPERATION_LOG.md: Diário de bordo cronológico das fases e comandos executados"
+                >
+                  OPERATION_LOG.md (Diário Operacional)
+                </button>
+              </div>
+
+              <div class="flex items-center gap-3">
+                <span class="text-[11px] text-gray-500 font-mono" x-show="wikiLastUpdated" x-text="'Sincronizado: ' + wikiLastUpdated" title="Horário da última sincronização da memória"></span>
+                <span class="px-2 py-0.5 rounded text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" title="Atualizado automaticamente após cada comando">Auto-extraído</span>
+                <button @click="fetchSessionWiki()" :disabled="wikiLoading" class="p-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 transition-colors" title="Recarregar dados da memória viva do disco">
+                  <svg class="w-4 h-4" :class="wikiLoading ? 'animate-spin text-cyan-400' : ''" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                </button>
+              </div>
+            </div>
+
+            <!-- Wiki Content Area -->
+            <div class="flex-1 overflow-y-auto p-4 font-mono text-xs">
+              <div x-show="wikiLoading && !sessionWiki[activeWikiSection]" class="py-12 text-center text-gray-500">
+                <svg class="animate-spin h-6 w-6 mx-auto text-cyan-500 mb-2" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg>
+                <span>Carregando registro da memória viva...</span>
+              </div>
+              <div x-show="sessionWiki[activeWikiSection]" class="bg-surface-900 border border-gray-800 rounded-lg p-4 whitespace-pre-wrap font-mono text-gray-300 leading-relaxed overflow-x-auto select-text" x-text="sessionWiki[activeWikiSection]"></div>
+              <div x-show="!wikiLoading && !sessionWiki[activeWikiSection]" class="text-center py-16 text-gray-600">
+                <p class="font-medium text-gray-400">Nenhum registro gravado nesta seção ainda.</p>
+                <p class="text-[11px] text-gray-500 mt-1">O Arcanum registra automaticamente hosts descobertos, portas abertas e tecnologias ao executar comandos.</p>
+              </div>
             </div>
           </div>
 
@@ -383,18 +450,19 @@
                   type="text"
                   x-model="chatInput"
                   @keydown.enter="sendMessage(chatInput); chatInput = ''"
-                  placeholder="Enter command or message..."
+                  placeholder="Digite uma instrução ou comando (ex: faça uma varredura de portas no alvo)..."
+                  title="Digite comandos ou instruções em linguagem natural para o agente Arcanum"
                   class="w-full bg-gray-800 border border-gray-700 text-sm text-gray-200 rounded-lg px-4 py-2.5 pr-10 focus:ring-1 focus:ring-cyan-500 focus:border-cyan-500 font-mono placeholder:text-gray-600"
                 />
               </div>
-              <button @click="sendMessage(chatInput); chatInput = ''" class="bg-cyan-600 hover:bg-cyan-500 text-white p-2.5 rounded-lg transition-colors">
+              <button @click="sendMessage(chatInput); chatInput = ''" title="Enviar instrução ao agente" class="bg-cyan-600 hover:bg-cyan-500 text-white p-2.5 rounded-lg transition-colors">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/></svg>
               </button>
-              <!-- Copilot approve/cancel -->
-              <template x-if="currentSession?.mode === 'copilot' && pendingApproval">
-                <div class="flex gap-1">
-                  <button @click="approveAction()" class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs px-3 py-2 rounded-lg">Approve</button>
-                  <button @click="cancelAction()" class="bg-red-600 hover:bg-red-500 text-white text-xs px-3 py-2 rounded-lg">Cancel</button>
+              <!-- Copilot / Manual approve/cancel -->
+              <template x-if="(currentSession?.mode === 'copilot' || currentSession?.mode === 'manual') && pendingApproval">
+                <div class="flex gap-1.5">
+                  <button @click="approveAction()" title="Aprovar e executar a ferramenta/comando sugerido pelo agente" class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs px-3 py-2 rounded-lg font-medium shadow-sm transition-colors flex items-center gap-1">✓ Aprovar</button>
+                  <button @click="cancelAction()" title="Recusar a ação sugerida e devolver o controle para nova orientação" class="bg-red-600 hover:bg-red-500 text-white text-xs px-3 py-2 rounded-lg font-medium shadow-sm transition-colors flex items-center gap-1">✕ Recusar</button>
                 </div>
               </template>
             </div>
@@ -405,42 +473,42 @@
         <div class="flex-[3] flex flex-col overflow-hidden bg-surface-950">
           <!-- Session Findings -->
           <div class="flex-1 overflow-y-auto border-b border-gray-800">
-            <div class="px-3 py-2 border-b border-gray-800 bg-surface-900 sticky top-0">
-              <h3 class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Findings</h3>
+            <div class="px-3 py-2 border-b border-gray-800 bg-surface-900 sticky top-0" title="Vulnerabilidades identificadas nesta sessão">
+              <h3 class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Vulnerabilidades da Sessão</h3>
             </div>
             <div class="divide-y divide-gray-800/50">
               <template x-for="f in sessionFindings" :key="f.id">
-                <div class="px-3 py-2 hover:bg-gray-800/30 transition-colors cursor-pointer" @click="expandedFinding = expandedFinding === f.id ? null : f.id">
+                <div class="px-3 py-2 hover:bg-gray-800/30 transition-colors cursor-pointer" @click="expandedFinding = expandedFinding === f.id ? null : f.id" title="Clique para ver detalhes, CVE e remediação">
                   <div class="flex items-center gap-2">
-                    <span class="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded" :class="severityClass(f.severity)" x-text="f.severity || 'info'"></span>
+                    <span class="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded" :class="severityClass(f.severity)" x-text="getSeverityLabel(f.severity)"></span>
                     <span class="text-xs text-gray-300 truncate" x-text="f.title"></span>
                   </div>
                   <div x-show="expandedFinding === f.id" x-cloak class="mt-2 text-xs text-gray-500 space-y-1">
                     <div x-show="f.cve_id"><span class="text-gray-600">CVE:</span> <span class="text-cyan-400" x-text="f.cve_id"></span></div>
                     <div x-show="f.cvss_score"><span class="text-gray-600">CVSS:</span> <span x-text="f.cvss_score"></span></div>
-                    <div x-show="f.remediation" class="text-gray-400" x-text="f.remediation"></div>
+                    <div x-show="f.remediation"><span class="text-gray-600">Correção:</span> <span class="text-gray-400" x-text="f.remediation"></span></div>
                   </div>
                 </div>
               </template>
-              <div x-show="sessionFindings.length === 0" class="px-3 py-6 text-center text-xs text-gray-600">No findings yet</div>
+              <div x-show="sessionFindings.length === 0" class="px-3 py-6 text-center text-xs text-gray-600">Nenhuma vulnerabilidade detectada ainda</div>
             </div>
           </div>
           <!-- Session Stash -->
           <div class="flex-1 overflow-y-auto">
-            <div class="px-3 py-2 border-b border-gray-800 bg-surface-900 sticky top-0">
-              <h3 class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Stash</h3>
+            <div class="px-3 py-2 border-b border-gray-800 bg-surface-900 sticky top-0" title="Artefatos sensíveis e credenciais obtidos nesta sessão">
+              <h3 class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Cofre da Sessão (Stash)</h3>
             </div>
             <div class="divide-y divide-gray-800/50">
               <template x-for="item in sessionStash" :key="item.id">
-                <div class="px-3 py-2">
+                <div class="px-3 py-2" :title="'Artefato: ' + item.type + ' (protegido)'">
                   <div class="flex items-center gap-2">
-                    <span class="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-gray-700 text-gray-300" x-text="item.type"></span>
+                    <span class="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-gray-700 text-gray-300" x-text="getStashTypeLabel(item.type)"></span>
                     <span class="text-xs font-mono text-gray-400 truncate" x-text="maskValue(item)"></span>
                   </div>
                   <div x-show="item.note" class="text-[10px] text-gray-600 mt-0.5" x-text="item.note"></div>
                 </div>
               </template>
-              <div x-show="sessionStash.length === 0" class="px-3 py-6 text-center text-xs text-gray-600">No stash items</div>
+              <div x-show="sessionStash.length === 0" class="px-3 py-6 text-center text-xs text-gray-600">Nenhum item no cofre ainda</div>
             </div>
           </div>
         </div>
@@ -452,46 +520,46 @@
     <!-- ============================================================ -->
     <div x-show="currentView === 'findings'" x-cloak class="p-4 md:p-6 space-y-4 fade-in">
       <div class="flex items-center justify-between">
-        <h2 class="text-lg font-semibold text-white">All Findings</h2>
+        <h2 class="text-lg font-semibold text-white" title="Lista consolidada de todas as vulnerabilidades encontradas em todas as operações">Todas as Vulnerabilidades</h2>
         <div class="flex items-center gap-2">
-          <select x-model="findingFilter" class="bg-gray-800 border border-gray-700 text-xs text-gray-300 rounded-md px-2 py-1.5">
-            <option value="">All Severities</option>
-            <option value="critical">Critical</option>
-            <option value="high">High</option>
-            <option value="medium">Medium</option>
-            <option value="low">Low</option>
-            <option value="info">Info</option>
+          <select x-model="findingFilter" title="Filtrar achados pelo nível de severidade CVSS" class="bg-gray-800 border border-gray-700 text-xs text-gray-300 rounded-md px-2 py-1.5">
+            <option value="">Todas as Severidades</option>
+            <option value="critical">Crítica (Critical)</option>
+            <option value="high">Alta (High)</option>
+            <option value="medium">Média (Medium)</option>
+            <option value="low">Baixa (Low)</option>
+            <option value="info">Informativa (Info)</option>
           </select>
-          <input type="text" x-model="findingSearch" placeholder="Search findings..." class="bg-gray-800 border border-gray-700 text-xs text-gray-300 rounded-md px-3 py-1.5 w-64 focus:ring-1 focus:ring-cyan-500 focus:border-cyan-500" />
+          <input type="text" x-model="findingSearch" placeholder="Buscar por título, CVE ou tipo..." title="Buscar vulnerabilidades em tempo real" class="bg-gray-800 border border-gray-700 text-xs text-gray-300 rounded-md px-3 py-1.5 w-64 focus:ring-1 focus:ring-cyan-500 focus:border-cyan-500" />
         </div>
       </div>
       <div class="bg-surface-900 border border-gray-800 rounded-xl overflow-hidden">
         <table class="w-full text-sm">
           <thead>
             <tr class="text-left text-xs text-gray-500 uppercase tracking-wider border-b border-gray-800">
-              <th class="px-4 py-2.5">Severity</th>
-              <th class="px-4 py-2.5">Title</th>
-              <th class="px-4 py-2.5">Type</th>
-              <th class="px-4 py-2.5">CVE</th>
-              <th class="px-4 py-2.5">CVSS</th>
-              <th class="px-4 py-2.5">Affected</th>
-              <th class="px-4 py-2.5">Verified</th>
+              <th class="px-4 py-2.5" title="Severidade da falha (Crítica, Alta, Média, Baixa, Info)">Severidade</th>
+              <th class="px-4 py-2.5" title="Título e descrição resumida da vulnerabilidade">Título</th>
+              <th class="px-4 py-2.5" title="Tipo ou classificação da fraqueza técnica">Tipo</th>
+              <th class="px-4 py-2.5" title="Identificador oficial Common Vulnerabilities and Exposures">CVE</th>
+              <th class="px-4 py-2.5" title="Pontuação Common Vulnerability Scoring System (0 a 10)">CVSS</th>
+              <th class="px-4 py-2.5" title="Host, IP ou URL onde a vulnerabilidade foi detectada">Alvo Afetado</th>
+              <th class="px-4 py-2.5" title="Indica se a vulnerabilidade foi comprovada com PoC funcional">Verificada</th>
             </tr>
           </thead>
           <tbody>
             <template x-for="f in filteredFindings" :key="f.id">
-              <tr class="border-b border-gray-800/50 hover:bg-gray-800/30 cursor-pointer transition-colors" @click="expandedFinding = expandedFinding === f.id ? null : f.id">
+              <tr class="border-b border-gray-800/50 hover:bg-gray-800/30 cursor-pointer transition-colors" @click="expandedFinding = expandedFinding === f.id ? null : f.id" title="Clique para expandir evidências e remediação">
                 <td class="px-4 py-3">
-                  <span class="text-[10px] font-bold uppercase px-2 py-0.5 rounded" :class="severityClass(f.severity)" x-text="f.severity || 'info'"></span>
+                  <span class="text-[10px] font-bold uppercase px-2 py-0.5 rounded" :class="severityClass(f.severity)" x-text="getSeverityLabel(f.severity)"></span>
                 </td>
                 <td class="px-4 py-3 text-white" x-text="f.title"></td>
                 <td class="px-4 py-3 text-xs text-gray-400" x-text="f.type || '-'"></td>
                 <td class="px-4 py-3 text-xs font-mono text-cyan-400" x-text="f.cve_id || '-'"></td>
                 <td class="px-4 py-3 text-xs" :class="f.cvss_score >= 9 ? 'text-red-400' : f.cvss_score >= 7 ? 'text-orange-400' : f.cvss_score >= 4 ? 'text-yellow-400' : 'text-gray-400'" x-text="f.cvss_score || '-'"></td>
-                <td class="px-4 py-3 text-xs font-mono text-gray-400 max-w-[200px] truncate" x-text="(f.affected && f.affected[0]) || '-'"></td>
+                <td class="px-4 py-3 text-xs font-mono text-gray-400 max-w-[200px] truncate" x-text="formatAffected(f.affected)"></td>
                 <td class="px-4 py-3">
-                  <span x-show="f.verified" class="text-emerald-400 text-xs">Yes</span>
-                  <span x-show="!f.verified" class="text-gray-600 text-xs">No</span>
+                  <span x-show="f.verified" class="text-emerald-400 text-xs" title="Vulnerabilidade confirmada com PoC">Sim</span>
+                  <span x-show="!f.verified" class="text-gray-600 text-xs" title="Ainda não confirmada com PoC">Não</span>
                 </td>
               </tr>
             </template>
@@ -500,21 +568,21 @@
                 <td colspan="7" class="px-6 py-4">
                   <div class="grid grid-cols-2 gap-4 text-xs">
                     <div>
-                      <h4 class="font-semibold text-gray-400 mb-1">Evidence</h4>
+                      <h4 class="font-semibold text-gray-400 mb-1" title="Resposta técnica ou dados brutos que comprovam a existência da falha">Evidência Técnica (PoC)</h4>
                       <pre class="font-mono text-gray-500 bg-surface-950 p-2 rounded max-h-32 overflow-auto" x-text="JSON.stringify(f.evidence, null, 2)"></pre>
                     </div>
                     <div>
-                      <h4 class="font-semibold text-gray-400 mb-1">Remediation</h4>
-                      <p class="text-gray-400" x-text="f.remediation || 'No remediation provided'"></p>
-                      <h4 class="font-semibold text-gray-400 mb-1 mt-3">CWE IDs</h4>
-                      <p class="text-gray-400 font-mono" x-text="(f.cwe_ids && f.cwe_ids.join(', ')) || 'N/A'"></p>
+                      <h4 class="font-semibold text-gray-400 mb-1" title="Orientações e boas práticas para corrigir e mitigar a vulnerabilidade">Remediação Recomendada</h4>
+                      <p class="text-gray-400" x-text="f.remediation || 'Nenhuma remediação fornecida'"></p>
+                      <h4 class="font-semibold text-gray-400 mb-1 mt-3" title="Classificação padrão CWE (Common Weakness Enumeration)">Identificador CWE</h4>
+                      <p class="text-gray-400 font-mono" x-text="formatCwe(f.cwe_ids)"></p>
                     </div>
                   </div>
                 </td>
               </tr>
             </template>
             <tr x-show="filteredFindings.length === 0">
-              <td colspan="7" class="px-4 py-8 text-center text-gray-600">No findings match your filters.</td>
+              <td colspan="7" class="px-4 py-8 text-center text-gray-600">Nenhuma vulnerabilidade corresponde aos filtros aplicados.</td>
             </tr>
           </tbody>
         </table>
@@ -526,28 +594,28 @@
     <!-- ============================================================ -->
     <div x-show="currentView === 'stash'" x-cloak class="p-4 md:p-6 space-y-4 fade-in">
       <div class="flex items-center justify-between">
-        <h2 class="text-lg font-semibold text-white">Stash</h2>
-        <button @click="showAddStash = !showAddStash" class="flex items-center gap-1.5 bg-cyan-600 hover:bg-cyan-500 text-white text-sm font-medium px-3 py-1.5 rounded-md transition-colors">
+        <h2 class="text-lg font-semibold text-white" title="Cofre para armazenar dados confidenciais, credenciais, hashes, tokens e alvos">Cofre de Artefatos (Stash)</h2>
+        <button @click="showAddStash = !showAddStash" title="Adicionar um novo artefato ou credencial ao cofre" class="flex items-center gap-1.5 bg-cyan-600 hover:bg-cyan-500 text-white text-sm font-medium px-3 py-1.5 rounded-md transition-colors shadow-sm">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg>
-          Add Item
+          + Adicionar Item
         </button>
       </div>
 
       <!-- Add Stash Form -->
       <div x-show="showAddStash" x-cloak class="bg-surface-900 border border-gray-800 rounded-xl p-4 fade-in">
         <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
-          <select x-model="newStash.type" class="bg-gray-800 border border-gray-700 text-sm text-gray-300 rounded-md px-3 py-2">
-            <option value="credential">Credential</option>
-            <option value="hash">Hash</option>
-            <option value="host">Host</option>
-            <option value="range">Range</option>
-            <option value="payload">Payload</option>
-            <option value="script">Script</option>
-            <option value="token">Token</option>
+          <select x-model="newStash.type" title="Tipo do artefato a ser guardado" class="bg-gray-800 border border-gray-700 text-sm text-gray-300 rounded-md px-3 py-2">
+            <option value="credential">Credencial (Usuário/Senha)</option>
+            <option value="hash">Hash Criptográfico</option>
+            <option value="host">Host / Endereço IP</option>
+            <option value="range">Faixa de Rede (CIDR)</option>
+            <option value="payload">Payload de Teste</option>
+            <option value="script">Script Auxiliar</option>
+            <option value="token">Token / Chave de API</option>
           </select>
-          <input type="text" x-model="newStash.value" placeholder="Value" class="bg-gray-800 border border-gray-700 text-sm text-gray-300 rounded-md px-3 py-2 font-mono focus:ring-1 focus:ring-cyan-500 focus:border-cyan-500" />
-          <input type="text" x-model="newStash.note" placeholder="Note (optional)" class="bg-gray-800 border border-gray-700 text-sm text-gray-300 rounded-md px-3 py-2 focus:ring-1 focus:ring-cyan-500 focus:border-cyan-500" />
-          <button @click="addStash(newStash.type, newStash.value, newStash.note); newStash = {type:'credential',value:'',note:''}" class="bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium px-4 py-2 rounded-md transition-colors">Save</button>
+          <input type="text" x-model="newStash.value" placeholder="Valor do artefato (ex: admin:123456)..." title="Conteúdo do artefato" class="bg-gray-800 border border-gray-700 text-sm text-gray-300 rounded-md px-3 py-2 font-mono focus:ring-1 focus:ring-cyan-500 focus:border-cyan-500" />
+          <input type="text" x-model="newStash.note" placeholder="Observação (ex: encontrado no /login)..." title="Anotação contextual explicativa" class="bg-gray-800 border border-gray-700 text-sm text-gray-300 rounded-md px-3 py-2 focus:ring-1 focus:ring-cyan-500 focus:border-cyan-500" />
+          <button @click="addStash(newStash.type, newStash.value, newStash.note); newStash = {type:'credential',value:'',note:''}" title="Salvar artefato no banco de dados local" class="bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium px-4 py-2 rounded-md transition-colors">Salvar no Cofre</button>
         </div>
       </div>
 
@@ -556,27 +624,27 @@
         <table class="w-full text-sm">
           <thead>
             <tr class="text-left text-xs text-gray-500 uppercase tracking-wider border-b border-gray-800">
-              <th class="px-4 py-2.5">Type</th>
-              <th class="px-4 py-2.5">Value</th>
-              <th class="px-4 py-2.5">Note</th>
-              <th class="px-4 py-2.5">Session</th>
-              <th class="px-4 py-2.5">Created</th>
+              <th class="px-4 py-2.5" title="Tipo do item armazenado">Tipo</th>
+              <th class="px-4 py-2.5" title="Valor do item (mascarado por segurança)">Valor</th>
+              <th class="px-4 py-2.5" title="Observações ou anotações contextuais">Observação</th>
+              <th class="px-4 py-2.5" title="Identificador da sessão onde o item foi encontrado">Sessão</th>
+              <th class="px-4 py-2.5" title="Momento em que o item foi registrado">Criado</th>
             </tr>
           </thead>
           <tbody>
             <template x-for="item in stashItems" :key="item.id">
               <tr class="border-b border-gray-800/50 hover:bg-gray-800/30 transition-colors">
                 <td class="px-4 py-3">
-                  <span class="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-gray-700 text-gray-300" x-text="item.type"></span>
+                  <span class="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-gray-700 text-gray-300" x-text="getStashTypeLabel(item.type)"></span>
                 </td>
-                <td class="px-4 py-3 font-mono text-xs text-gray-300" x-text="maskValue(item)"></td>
+                <td class="px-4 py-3 font-mono text-xs text-gray-300" x-text="maskValue(item)" title="Valor protegido"></td>
                 <td class="px-4 py-3 text-xs text-gray-400" x-text="item.note || '-'"></td>
                 <td class="px-4 py-3 text-xs text-gray-500" x-text="item.session_id ? item.session_id.slice(0, 8) : '-'"></td>
                 <td class="px-4 py-3 text-xs text-gray-500" x-text="formatTime(item.created_at)"></td>
               </tr>
             </template>
             <tr x-show="stashItems.length === 0">
-              <td colspan="5" class="px-4 py-8 text-center text-gray-600">No stash items. Add credentials, hashes, hosts, and other artifacts.</td>
+              <td colspan="5" class="px-4 py-8 text-center text-gray-600">Nenhum item no cofre ainda. Adicione credenciais, hashes, hosts e artefatos sensíveis.</td>
             </tr>
           </tbody>
         </table>
@@ -587,49 +655,50 @@
     <!-- REPORTS VIEW                                                  -->
     <!-- ============================================================ -->
     <div x-show="currentView === 'reports'" x-cloak class="p-4 md:p-6 space-y-4 fade-in">
-      <h2 class="text-lg font-semibold text-white">Reports</h2>
+      <h2 class="text-lg font-semibold text-white" title="Geração e exportação de relatórios completos de pentest e avaliação de segurança">Relatórios de Segurança</h2>
 
       <div class="bg-surface-900 border border-gray-800 rounded-xl p-6">
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
           <!-- Generate -->
           <div>
-            <h3 class="text-sm font-semibold text-gray-300 mb-3">Generate Report</h3>
+            <h3 class="text-sm font-semibold text-gray-300 mb-3" title="Selecione a operação e os formatos desejados para consolidar os resultados">Gerar Novo Relatório</h3>
             <div class="space-y-3">
-              <select x-model="reportSession" class="w-full bg-gray-800 border border-gray-700 text-sm text-gray-300 rounded-md px-3 py-2">
-                <option value="">Select operation...</option>
+              <select x-model="reportSession" title="Selecione a operação para consolidar em relatório" class="w-full bg-gray-800 border border-gray-700 text-sm text-gray-300 rounded-md px-3 py-2">
+                <option value="">Selecione uma operação...</option>
                 <template x-for="s in sessions" :key="s.id">
-                  <option :value="s.name" x-text="s.name + ' (' + s.target + ')'"></option>
+                  <option :value="s.name" x-text="s.name + ' (' + (s.target || 'sem alvo') + ')'"></option>
                 </template>
               </select>
               <div class="flex flex-wrap gap-3">
-                <template x-for="fmt in ['pdf', 'html', 'md', 'json']" :key="fmt">
-                  <label class="flex items-center gap-2 text-sm text-gray-400 cursor-pointer">
-                    <input type="checkbox" :value="fmt" x-model="reportFormats" class="rounded bg-gray-800 border-gray-600 text-cyan-500 focus:ring-cyan-500 focus:ring-offset-0" />
-                    <span class="uppercase text-xs font-mono" x-text="fmt"></span>
+                <template x-for="fmt in reportFormatList" :key="fmt.id">
+                  <label class="flex items-center gap-2 text-sm text-gray-400 cursor-pointer" :title="fmt.tooltip">
+                    <input type="checkbox" :value="fmt.id" x-model="reportFormats" class="rounded bg-gray-800 border-gray-600 text-cyan-500 focus:ring-cyan-500 focus:ring-offset-0" />
+                    <span class="uppercase text-xs font-mono" x-text="fmt.label"></span>
                   </label>
                 </template>
               </div>
               <button
                 @click="generateReport(reportSession, reportFormats)"
                 :disabled="!reportSession || reportFormats.length === 0"
+                title="Consolidar vulnerabilidades, evidências e gerar arquivos de relatório"
                 class="bg-cyan-600 hover:bg-cyan-500 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm font-medium px-4 py-2 rounded-md transition-colors"
-              >Generate Report</button>
+              >Gerar Relatório</button>
             </div>
           </div>
           <!-- Downloads -->
           <div>
-            <h3 class="text-sm font-semibold text-gray-300 mb-3">Generated Reports</h3>
+            <h3 class="text-sm font-semibold text-gray-300 mb-3" title="Relatórios prontos disponíveis para visualização ou download">Relatórios Gerados</h3>
             <div class="space-y-2">
               <template x-for="r in reports" :key="r.path">
-                <a :href="r.path" download class="flex items-center gap-3 p-3 bg-gray-800/50 hover:bg-gray-800 rounded-lg transition-colors group">
+                <a :href="r.path" download class="flex items-center gap-3 p-3 bg-gray-800/50 hover:bg-gray-800 rounded-lg transition-colors group" :title="'Baixar relatório ' + r.name">
                   <svg class="w-5 h-5 text-gray-500 group-hover:text-cyan-400 transition-colors" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
                   <div class="flex-1">
                     <div class="text-sm text-gray-300" x-text="r.name || r.path.split('/').pop()"></div>
-                    <div class="text-[10px] text-gray-600" x-text="r.format?.toUpperCase() + ' report'"></div>
+                    <div class="text-[10px] text-gray-600" x-text="'Relatório ' + r.format?.toUpperCase()"></div>
                   </div>
                 </a>
               </template>
-              <div x-show="reports.length === 0" class="text-center text-gray-600 text-sm py-4">No reports generated yet.</div>
+              <div x-show="reports.length === 0" class="text-center text-gray-600 text-sm py-4">Nenhum relatório gerado ainda.</div>
             </div>
           </div>
         </div>
@@ -640,31 +709,32 @@
     <!-- CVE SEARCH VIEW                                               -->
     <!-- ============================================================ -->
     <div x-show="currentView === 'cve'" x-cloak class="p-4 md:p-6 space-y-4 fade-in">
-      <h2 class="text-lg font-semibold text-white">CVE Search</h2>
+      <h2 class="text-lg font-semibold text-white" title="Consulta à base de dados de vulnerabilidades e exposições comuns conhecidas (CVE/NVD)">Pesquisa na Base CVE</h2>
 
       <div class="flex items-center gap-3">
         <input
           type="text"
           x-model="cveQuery"
           @keydown.enter="searchCVE(cveQuery)"
-          placeholder="Search by CVE ID, keyword, or product (e.g., CVE-2024-1234, Apache, Log4j)..."
+          placeholder="Pesquise por ID do CVE, tecnologia ou software (ex: CVE-2024-1234, Apache, Log4j)..."
+          title="Digite o código CVE ou nome do produto para buscar falhas e exploits conhecidos"
           class="flex-1 bg-gray-800 border border-gray-700 text-sm text-gray-300 rounded-md px-4 py-2.5 font-mono focus:ring-1 focus:ring-cyan-500 focus:border-cyan-500 placeholder:text-gray-600"
         />
-        <button @click="searchCVE(cveQuery)" class="bg-cyan-600 hover:bg-cyan-500 text-white text-sm font-medium px-4 py-2.5 rounded-md transition-colors">Search</button>
+        <button @click="searchCVE(cveQuery)" title="Executar busca na base CVE" class="bg-cyan-600 hover:bg-cyan-500 text-white text-sm font-medium px-4 py-2.5 rounded-md transition-colors">Pesquisar</button>
       </div>
 
       <div class="bg-surface-900 border border-gray-800 rounded-xl overflow-hidden">
         <div x-show="cveLoading" class="p-8 text-center text-gray-500">
           <svg class="animate-spin h-6 w-6 mx-auto text-cyan-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-          <div class="mt-2 text-sm">Searching CVE database...</div>
+          <div class="mt-2 text-sm">Consultando base de dados CVE...</div>
         </div>
         <table x-show="!cveLoading && cveResults.length > 0" class="w-full text-sm">
           <thead>
             <tr class="text-left text-xs text-gray-500 uppercase tracking-wider border-b border-gray-800">
-              <th class="px-4 py-2.5">CVE ID</th>
-              <th class="px-4 py-2.5">CVSS</th>
-              <th class="px-4 py-2.5">Description</th>
-              <th class="px-4 py-2.5">Exploit</th>
+              <th class="px-4 py-2.5" title="Identificador oficial do CVE">ID do CVE</th>
+              <th class="px-4 py-2.5" title="Pontuação de impacto CVSS (0 a 10)">CVSS</th>
+              <th class="px-4 py-2.5" title="Descrição detalhada da vulnerabilidade">Descrição</th>
+              <th class="px-4 py-2.5" title="Disponibilidade de código de exploração (exploit) público">Exploit</th>
             </tr>
           </thead>
           <tbody>
@@ -681,15 +751,99 @@
                 </td>
                 <td class="px-4 py-3 text-xs text-gray-400 max-w-lg" x-text="cve.description ? cve.description.slice(0, 200) + (cve.description.length > 200 ? '...' : '') : '-'"></td>
                 <td class="px-4 py-3">
-                  <span x-show="cve.has_exploit" class="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-red-500/20 text-red-400">Available</span>
-                  <span x-show="!cve.has_exploit" class="text-[10px] text-gray-600">None</span>
+                  <span x-show="cve.has_exploit" class="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-red-500/20 text-red-400" title="Existe código de exploit público disponível">Disponível</span>
+                  <span x-show="!cve.has_exploit" class="text-[10px] text-gray-600" title="Nenhum exploit público registrado">Nenhum</span>
                 </td>
               </tr>
             </template>
           </tbody>
         </table>
-        <div x-show="!cveLoading && cveResults.length === 0 && cveSearched" class="px-4 py-8 text-center text-gray-600">No results found.</div>
-        <div x-show="!cveLoading && !cveSearched" class="px-4 py-8 text-center text-gray-600">Enter a search query above.</div>
+        <div x-show="!cveLoading && cveResults.length === 0 && cveSearched" class="px-4 py-8 text-center text-gray-600">Nenhum resultado encontrado para esta consulta.</div>
+        <div x-show="!cveLoading && !cveSearched" class="px-4 py-8 text-center text-gray-600">Digite um termo ou CVE no campo de busca acima.</div>
+      </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- PLAYBOOKS (CONTINUOUS LEARNING) VIEW                         -->
+    <!-- ============================================================ -->
+    <div x-show="currentView === 'playbooks'" x-cloak class="p-4 md:p-6 space-y-4 fade-in">
+      <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+        <div>
+          <h2 class="text-lg font-semibold text-white flex items-center gap-2" title="Base de conhecimento e playbooks táticos de pentest com aprendizado contínuo">
+            <span>Playbooks de Ataque & Aprendizado Contínuo</span>
+            <span class="text-xs font-mono font-normal text-cyan-400 bg-cyan-500/10 px-2 py-0.5 rounded border border-cyan-500/20" title="Indexação rápida em SQLite com busca full-text FTS5">SQLite FTS5</span>
+          </h2>
+          <p class="text-xs text-gray-400 mt-0.5">Inteligência tática reutilizável, técnicas de contorno de WAF/403 e procedimentos acessíveis pela memória do LLM.</p>
+        </div>
+        <div class="flex items-center gap-2">
+          <button @click="showNewPlaybook = true" title="Cadastrar nova técnica tática ou procedimento na base de conhecimento" class="flex items-center gap-1.5 bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-medium px-3 py-2 rounded-md transition-colors shadow-sm">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg>
+            + Novo Playbook
+          </button>
+        </div>
+      </div>
+
+      <!-- Search & Category Filters -->
+      <div class="flex flex-col sm:flex-row gap-3">
+        <div class="flex-1 relative">
+          <input
+            type="text"
+            x-model="playbookSearch"
+            @input.debounce.300ms="fetchPlaybooks(playbookSearch)"
+            placeholder="Buscar playbooks por gatilho, técnica, CVE ou ferramenta (ex: 403 bypass, waf, spring boot, nmap)..."
+            title="Pesquisa full-text em todos os títulos, gatilhos e passos de playbooks"
+            class="w-full bg-gray-800 border border-gray-700 text-sm text-gray-300 rounded-md px-4 py-2.5 font-mono focus:ring-1 focus:ring-cyan-500 focus:border-cyan-500 placeholder:text-gray-600"
+          />
+        </div>
+        <div class="flex items-center gap-1.5 overflow-x-auto">
+          <template x-for="cat in playbookCategoryList" :key="cat.id">
+            <button
+              @click="playbookCategory = (playbookCategory === cat.id ? '' : cat.id)"
+              :class="(playbookCategory === cat.id || (!playbookCategory && cat.id === 'all')) ? 'bg-cyan-600 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'"
+              class="px-3 py-2 rounded-md text-xs font-medium transition-colors whitespace-nowrap"
+              :title="cat.tooltip"
+              x-text="cat.label"
+            ></button>
+          </template>
+        </div>
+      </div>
+
+      <!-- Playbook Grid -->
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <template x-for="pb in filteredPlaybooks" :key="pb.id">
+          <div class="bg-surface-900 border border-gray-800 hover:border-cyan-700/60 rounded-xl p-4 transition-all flex flex-col justify-between" :title="'Playbook tático: ' + pb.title">
+            <div>
+              <div class="flex items-center justify-between gap-2 mb-2">
+                <span class="text-xs font-semibold text-white tracking-wide truncate" x-text="pb.title"></span>
+                <span class="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-cyan-500/10 text-cyan-400 border border-cyan-500/20" x-text="getCategoryLabel(pb.category)" title="Categoria técnica"></span>
+              </div>
+              <div class="mb-2">
+                <span class="text-[11px] text-gray-500 uppercase font-mono tracking-wider" title="Condição ou mensagem que ativa a recomendação desta tática">Gatilho (Trigger):</span>
+                <p class="text-xs text-emerald-400 font-mono mt-0.5 bg-gray-950/60 px-2 py-1 rounded" x-text="pb.trigger"></p>
+              </div>
+              <div class="mb-3">
+                <span class="text-[11px] text-gray-500 uppercase font-mono tracking-wider" title="Sequência detalhada de comandos e testes recomendados">Passos Táticos:</span>
+                <pre class="text-xs text-gray-300 font-mono mt-0.5 bg-surface-950 p-2.5 rounded max-h-36 overflow-y-auto whitespace-pre-wrap" x-text="pb.steps"></pre>
+              </div>
+            </div>
+
+            <div class="pt-3 border-t border-gray-800/80 flex items-center justify-between text-xs text-gray-500">
+              <div class="flex items-center gap-1.5 flex-wrap">
+                <template x-for="t in (Array.isArray(pb.tools) ? pb.tools : (typeof pb.tools === 'string' ? JSON.parse(pb.tools || '[]') : []))" :key="t">
+                  <span class="text-[10px] font-mono bg-gray-800 text-gray-400 px-1.5 py-0.5 rounded" x-text="t" title="Ferramenta recomendada"></span>
+                </template>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="text-[10px] font-mono" x-text="'Autor: ' + (pb.author || 'builtin')" title="Autor ou origem deste playbook"></span>
+                <span class="text-[10px] font-mono text-cyan-400" x-text="'Utilizado ' + (pb.times_used || 0) + 'x'" title="Quantidade de vezes que esta técnica foi acionada"></span>
+              </div>
+            </div>
+          </div>
+        </template>
+      </div>
+
+      <div x-show="filteredPlaybooks.length === 0 && !playbookLoading" class="bg-surface-900 border border-gray-800 rounded-xl p-8 text-center text-gray-600">
+        Nenhum playbook corresponde aos seus critérios. Crie um novo playbook acima para ensinar novas táticas ao agente Arcanum!
       </div>
     </div>
 
@@ -701,25 +855,30 @@
   <div x-show="showNewOp" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" @click.self="showNewOp = false" @keydown.escape.window="showNewOp = false">
     <div class="bg-surface-900 border border-gray-800 rounded-2xl w-full max-w-md mx-4 shadow-2xl fade-in">
       <div class="p-6">
-        <h2 class="text-lg font-semibold text-white mb-4">New Operation</h2>
+        <h2 class="text-lg font-semibold text-white mb-4" title="Configuração de nova sessão de teste de segurança">Nova Operação de Segurança</h2>
         <div class="space-y-4">
           <div>
-            <label class="block text-xs text-gray-400 mb-1">Operation Name</label>
-            <input type="text" x-model="newOp.name" placeholder="e.g., corp-pentest-q1" class="w-full bg-gray-800 border border-gray-700 text-sm text-gray-200 rounded-md px-3 py-2 focus:ring-1 focus:ring-cyan-500 focus:border-cyan-500 font-mono" />
+            <label class="block text-xs text-gray-400 mb-1" title="Nome identificador da sessão">Nome da Operação</label>
+            <input type="text" x-model="newOp.name" placeholder="ex: corp-pentest-q1" title="Identificador sem espaços para a operação, ex: pentest-web-q1" class="w-full bg-gray-800 border border-gray-700 text-sm text-gray-200 rounded-md px-3 py-2 focus:ring-1 focus:ring-cyan-500 focus:border-cyan-500 font-mono" />
           </div>
           <div>
-            <label class="block text-xs text-gray-400 mb-1">Target</label>
-            <input type="text" x-model="newOp.target" placeholder="e.g., 10.0.0.0/24 or example.com" class="w-full bg-gray-800 border border-gray-700 text-sm text-gray-200 rounded-md px-3 py-2 focus:ring-1 focus:ring-cyan-500 focus:border-cyan-500 font-mono" />
+            <label class="block text-xs text-gray-400 mb-1" title="Alvo sob avaliação">Alvo Principal</label>
+            <input type="text" x-model="newOp.target" placeholder="ex: 10.0.0.0/24 ou empresa.com" title="Endereço IP, sub-rede ou domínio alvo sob teste de segurança" class="w-full bg-gray-800 border border-gray-700 text-sm text-gray-200 rounded-md px-3 py-2 focus:ring-1 focus:ring-cyan-500 focus:border-cyan-500 font-mono" />
           </div>
           <div>
-            <label class="block text-xs text-gray-400 mb-1">Mode</label>
+            <label class="block text-xs text-gray-400 mb-1" title="Modo de autonomia do agente">Modo de Autonomia</label>
             <div class="grid grid-cols-3 gap-2">
-              <template x-for="m in ['autopilot', 'copilot', 'manual']" :key="m">
+              <template x-for="m in [
+                {id: 'autopilot', label: 'Autopilot', tip: 'Totalmente autônomo sem confirmações'},
+                {id: 'copilot', label: 'Copilot', tip: 'Pede aprovação para ferramentas de risco médio/alto'},
+                {id: 'manual', label: 'Manual', tip: 'Apenas executa quando solicitado explicitamente'}
+              ]" :key="m.id">
                 <button
-                  @click="newOp.mode = m"
-                  :class="newOp.mode === m ? 'border-cyan-500 bg-cyan-500/10 text-cyan-400' : 'border-gray-700 text-gray-400 hover:border-gray-600'"
+                  @click="newOp.mode = m.id"
+                  :class="newOp.mode === m.id ? 'border-cyan-500 bg-cyan-500/10 text-cyan-400' : 'border-gray-700 text-gray-400 hover:border-gray-600'"
                   class="border rounded-md py-2 text-sm capitalize transition-colors"
-                  x-text="m"
+                  :title="m.tip"
+                  x-text="m.label"
                 ></button>
               </template>
             </div>
@@ -727,8 +886,57 @@
         </div>
       </div>
       <div class="flex items-center justify-end gap-2 px-6 py-4 border-t border-gray-800">
-        <button @click="showNewOp = false" class="text-sm text-gray-400 hover:text-gray-200 px-4 py-2 rounded-md transition-colors">Cancel</button>
-        <button @click="createSession(newOp.name, newOp.target, newOp.mode); showNewOp = false; newOp = {name:'',target:'',mode:'manual'}" :disabled="!newOp.name" class="bg-cyan-600 hover:bg-cyan-500 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm font-medium px-4 py-2 rounded-md transition-colors">Create</button>
+        <button @click="showNewOp = false" class="text-sm text-gray-400 hover:text-gray-200 px-4 py-2 rounded-md transition-colors" title="Cancelar criação">Cancelar</button>
+        <button @click="createSession(newOp.name, newOp.target, newOp.mode); showNewOp = false; newOp = {name:'',target:'',mode:'manual'}" :disabled="!newOp.name" class="bg-cyan-600 hover:bg-cyan-500 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm font-medium px-4 py-2 rounded-md transition-colors" title="Iniciar nova sessão">Criar Operação</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- NEW PLAYBOOK MODAL                                           -->
+  <!-- ============================================================ -->
+  <div x-show="showNewPlaybook" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" @click.self="showNewPlaybook = false" @keydown.escape.window="showNewPlaybook = false">
+    <div class="bg-surface-900 border border-gray-800 rounded-2xl w-full max-w-lg mx-4 shadow-2xl fade-in max-h-[90vh] flex flex-col">
+      <div class="p-6 overflow-y-auto space-y-4">
+        <h2 class="text-lg font-semibold text-white mb-2" title="Cadastrar nova tática ou procedimento na base de conhecimento">Novo Playbook Tático</h2>
+        <div>
+          <label class="block text-xs text-gray-400 mb-1" title="Título descritivo da técnica">Título da Técnica</label>
+          <input type="text" x-model="newPlaybook.title" placeholder="ex: Contorno de Introspecção GraphQL via POST" title="Nome identificador da técnica" class="w-full bg-gray-800 border border-gray-700 text-sm text-gray-200 rounded-md px-3 py-2 font-mono focus:ring-1 focus:ring-cyan-500 focus:border-cyan-500" />
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs text-gray-400 mb-1" title="Categoria técnica">Categoria</label>
+            <select x-model="newPlaybook.category" class="w-full bg-gray-800 border border-gray-700 text-sm text-gray-300 rounded-md px-3 py-2">
+              <option value="recon">Reconhecimento (Recon)</option>
+              <option value="web">Aplicações Web (Web)</option>
+              <option value="bypass">Contorno / Bypass (Bypass)</option>
+              <option value="exploit">Exploração (Exploit)</option>
+              <option value="privesc">Escalação de Privilégio (Privesc)</option>
+              <option value="ad">Active Directory (AD)</option>
+              <option value="general">Geral (General)</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs text-gray-400 mb-1" title="Ferramentas recomendadas">Ferramentas (separadas por vírgula)</label>
+            <input type="text" x-model="newPlaybook.tools" placeholder="ex: curl, ffuf, nmap" title="Binários utilizados na técnica" class="w-full bg-gray-800 border border-gray-700 text-sm text-gray-200 rounded-md px-3 py-2 font-mono focus:ring-1 focus:ring-cyan-500 focus:border-cyan-500" />
+          </div>
+        </div>
+        <div>
+          <label class="block text-xs text-gray-400 mb-1" title="Condição de ativação da tática">Condição de Gatilho (Trigger)</label>
+          <input type="text" x-model="newPlaybook.trigger" placeholder="ex: Endpoint /graphql retorna erro 400 ou schema desabilitado" title="Situação ou mensagem que aciona este procedimento" class="w-full bg-gray-800 border border-gray-700 text-sm text-gray-200 rounded-md px-3 py-2 font-mono focus:ring-1 focus:ring-cyan-500 focus:border-cyan-500" />
+        </div>
+        <div>
+          <label class="block text-xs text-gray-400 mb-1" title="Sequência detalhada de comandos">Passos Táticos & Comandos</label>
+          <textarea rows="5" x-model="newPlaybook.steps" placeholder="1. Tentar POST com Content-Type: application/json&#10;2. Utilizar consulta __schema { types { name } }&#10;3. Se bloqueado, testar parâmetros de URL ?query=..." title="Passo a passo com comandos práticos" class="w-full bg-gray-800 border border-gray-700 text-xs text-gray-200 rounded-md p-3 font-mono focus:ring-1 focus:ring-cyan-500 focus:border-cyan-500"></textarea>
+        </div>
+        <div>
+          <label class="block text-xs text-gray-400 mb-1" title="Orientações e contexto defensivo">Notas / Remediação (opcional)</label>
+          <input type="text" x-model="newPlaybook.notes" placeholder="Anotações para o operador ou recomendações defensivas" title="Observações complementares" class="w-full bg-gray-800 border border-gray-700 text-sm text-gray-200 rounded-md px-3 py-2 font-mono focus:ring-1 focus:ring-cyan-500 focus:border-cyan-500" />
+        </div>
+      </div>
+      <div class="flex items-center justify-end gap-2 px-6 py-4 border-t border-gray-800 bg-surface-950">
+        <button @click="showNewPlaybook = false" class="text-sm text-gray-400 hover:text-gray-200 px-4 py-2 rounded-md transition-colors" title="Cancelar cadastro">Cancelar</button>
+        <button @click="savePlaybook()" :disabled="!newPlaybook.title || !newPlaybook.steps" class="bg-cyan-600 hover:bg-cyan-500 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm font-medium px-4 py-2 rounded-md transition-colors" title="Salvar técnica na base de conhecimento">Salvar Playbook</button>
       </div>
     </div>
   </div>
@@ -739,20 +947,20 @@
   <div x-show="showSettings" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" @click.self="showSettings = false" @keydown.escape.window="showSettings = false">
     <div class="bg-surface-900 border border-gray-800 rounded-2xl w-full max-w-sm mx-4 shadow-2xl fade-in">
       <div class="p-6">
-        <h2 class="text-lg font-semibold text-white mb-4">Settings</h2>
+        <h2 class="text-lg font-semibold text-white mb-4" title="Configurações de rede e conexão com o Arcanum Core">Configurações de Conexão</h2>
         <div class="space-y-4">
           <div>
-            <label class="block text-xs text-gray-400 mb-1">API Base URL</label>
-            <input type="text" x-model="apiBase" class="w-full bg-gray-800 border border-gray-700 text-sm text-gray-200 rounded-md px-3 py-2 font-mono focus:ring-1 focus:ring-cyan-500 focus:border-cyan-500" />
+            <label class="block text-xs text-gray-400 mb-1" title="Endereço HTTP do servidor de API">URL Base da API REST</label>
+            <input type="text" x-model="apiBase" title="URL da API REST do Arcanum" class="w-full bg-gray-800 border border-gray-700 text-sm text-gray-200 rounded-md px-3 py-2 font-mono focus:ring-1 focus:ring-cyan-500 focus:border-cyan-500" />
           </div>
           <div>
-            <label class="block text-xs text-gray-400 mb-1">WebSocket URL</label>
-            <input type="text" x-model="wsBase" class="w-full bg-gray-800 border border-gray-700 text-sm text-gray-200 rounded-md px-3 py-2 font-mono focus:ring-1 focus:ring-cyan-500 focus:border-cyan-500" />
+            <label class="block text-xs text-gray-400 mb-1" title="Endereço do canal WebSocket de tempo real">URL do Canal WebSocket</label>
+            <input type="text" x-model="wsBase" title="URL do WebSocket para streaming de eventos" class="w-full bg-gray-800 border border-gray-700 text-sm text-gray-200 rounded-md px-3 py-2 font-mono focus:ring-1 focus:ring-cyan-500 focus:border-cyan-500" />
           </div>
         </div>
       </div>
       <div class="flex items-center justify-end gap-2 px-6 py-4 border-t border-gray-800">
-        <button @click="showSettings = false" class="text-sm text-gray-400 hover:text-gray-200 px-4 py-2 rounded-md transition-colors">Close</button>
+        <button @click="showSettings = false" class="text-sm text-gray-400 hover:text-gray-200 px-4 py-2 rounded-md transition-colors" title="Fechar configurações">Fechar</button>
       </div>
     </div>
   </div>
@@ -794,13 +1002,57 @@
         messages: [],
         ws: null,
         wsConnected: false,
+        serverOnline: false,
+        agentBusy: false,
         stats: { ops: 0, targets: 0, findings: {}, stash: 0 },
         globalMode: 'manual',
         chatInput: '',
-        activeTab: 'recon',
-        sessionTabs: ['recon', 'web', 'network', 'creds', 'exploit', 'post', 'osint', 'findings'],
+        activeTab: 'console',
+        sessionTabs: ['console', 'wiki', 'recon', 'web', 'network', 'creds', 'exploit', 'post', 'osint', 'findings'],
         expandedFinding: null,
         pendingApproval: false,
+
+        // Navigation items with Portuguese labels and tooltips
+        navItems: [
+          { id: 'dashboard', label: 'Painel Geral', tooltip: 'Visão geral das operações ativas, alvos cadastrados e métricas consolidadas' },
+          { id: 'findings', label: 'Vulnerabilidades', tooltip: 'Lista e filtros de todas as vulnerabilidades e falhas descobertas' },
+          { id: 'stash', label: 'Cofre de Artefatos', tooltip: 'Armazenamento protegido de credenciais, hashes, tokens e IPs coletados' },
+          { id: 'reports', label: 'Relatórios', tooltip: 'Geração e download de relatórios técnicos e executivos (PDF, HTML, MD, JSON)' },
+          { id: 'cve', label: 'Pesquisa CVE', tooltip: 'Consulta à base global de vulnerabilidades conhecidas (Common Vulnerabilities and Exposures)' },
+          { id: 'playbooks', label: 'Base de Táticas (Playbooks)', tooltip: 'Base de conhecimento de técnicas de pentest, contornos de WAF/403 e aprendizado contínuo' },
+        ],
+
+        // Report formats with tooltips
+        reportFormatList: [
+          { id: 'pdf', label: 'PDF', tooltip: 'Relatório executivo formatado com sumário e gráficos para diretoria' },
+          { id: 'html', label: 'HTML', tooltip: 'Relatório interativo autônomo com navegação e filtros' },
+          { id: 'md', label: 'Markdown', tooltip: 'Relatório em texto puro formatado para documentação em repositórios' },
+          { id: 'json', label: 'JSON', tooltip: 'Exportação completa de dados estruturados para integração via API/SIEM' },
+        ],
+
+        // Playbook categories with tooltips
+        playbookCategoryList: [
+          { id: 'all', label: 'Todos', tooltip: 'Exibir playbooks de todas as categorias' },
+          { id: 'recon', label: 'Reconhecimento', tooltip: 'Táticas de mapeamento de rede, DNS e subdomínios' },
+          { id: 'web', label: 'Aplicações Web', tooltip: 'Técnicas de análise de vulnerabilidades web' },
+          { id: 'bypass', label: 'Contorno / Bypass', tooltip: 'Técnicas para contornar restrições de WAF, 403 Forbidden e rate limits' },
+          { id: 'exploit', label: 'Exploração', tooltip: 'Procedimentos controlados de validação e exploração com PoC' },
+          { id: 'privesc', label: 'Escalação', tooltip: 'Táticas de elevação de privilégios em sistemas' },
+        ],
+
+        // Wiki / Living Memory state
+        sessionWiki: { target_map: '', attack_surface: '', operation_log: '' },
+        activeWikiSection: 'target_map',
+        wikiLoading: false,
+        wikiLastUpdated: null,
+
+        // Playbooks (Continuous Learning) state
+        playbooks: [],
+        playbookSearch: '',
+        playbookCategory: '',
+        playbookLoading: false,
+        showNewPlaybook: false,
+        newPlaybook: { title: '', category: 'web', trigger: '', steps: '', tools: '', notes: '' },
 
         // Findings view
         findingFilter: '',
@@ -828,12 +1080,20 @@
 
         // Settings
         apiBase: window.location.origin + '/api',
-        wsBase: (window.location.protocol === 'https:' ? 'wss://' : 'ws://') + window.location.host,
+        wsBase: (window.location.protocol === 'https:' ? 'wss://' : 'ws://') + (window.location.hostname === 'localhost' ? '127.0.0.1:' + (window.location.port || '8000') : window.location.host),
 
         // Toast
         toast: { show: false, message: '', type: 'info' },
 
         // ---- Computed ----
+        get filteredPlaybooks() {
+          let list = this.playbooks;
+          if (this.playbookCategory && this.playbookCategory !== 'all') {
+            list = list.filter(p => (p.category || '').toLowerCase() === this.playbookCategory.toLowerCase());
+          }
+          return list;
+        },
+
         get filteredFindings() {
           let list = this.findings;
           if (this.findingFilter) {
@@ -865,23 +1125,28 @@
           await this.fetchSessions();
           await this.fetchFindings();
           await this.fetchStash();
+          await this.fetchPlaybooks();
           this.updateStats();
         },
 
         // ---- API Methods ----
         async apiFetch(path, opts = {}) {
           try {
+            const authHeaders = {};
+            if (window.ARCANUM_TOKEN) authHeaders['Authorization'] = 'Bearer ' + window.ARCANUM_TOKEN;
             const res = await fetch(this.apiBase + path, {
-              headers: { 'Content-Type': 'application/json', ...opts.headers },
+              headers: { 'Content-Type': 'application/json', ...authHeaders, ...opts.headers },
               ...opts,
             });
             if (!res.ok) {
               const err = await res.text();
               throw new Error(err || res.statusText);
             }
+            this.serverOnline = true;
             return await res.json();
           } catch (e) {
             console.error('API Error:', e);
+            this.serverOnline = false;
             this.showToast(e.message, 'error');
             return null;
           }
@@ -913,47 +1178,66 @@
           });
           if (data) {
             await this.fetchSessions();
-            this.showToast('Operation "' + name + '" created', 'success');
+            this.showToast('Operação "' + name + '" criada com sucesso!', 'success');
             const session = data.session || data;
             this.openSession(session);
           }
         },
 
         async deleteSession(name) {
-          if (!confirm('Delete operation "' + name + '"?')) return;
+          if (!confirm('Deseja realmente excluir a operação "' + name + '" e todos os seus registros?')) return;
           await this.apiFetch('/sessions/' + encodeURIComponent(name), { method: 'DELETE' });
           await this.fetchSessions();
           if (this.currentSession && this.currentSession.name === name) {
             this.currentSession = null;
             this.currentView = 'dashboard';
           }
-          this.showToast('Operation deleted', 'info');
+          this.showToast('Operação excluída com sucesso', 'info');
         },
 
         openSession(session) {
           this.currentSession = session;
           this.currentView = 'session';
           this.messages = [];
-          this.activeTab = 'recon';
+          this.activeTab = 'console';
+          this.agentBusy = false;
           this.connectWebSocket(session.id);
+          this.fetchSessionWiki();
           this.messages.push({
             type: 'system',
-            content: 'Connected to session: ' + session.name + ' | Target: ' + (session.target || 'N/A') + ' | Mode: ' + session.mode,
+            content: 'Conectado à operação: ' + session.name + ' | Alvo: ' + (session.target || 'N/A') + ' | Modo: ' + session.mode,
             timestamp: this.now(),
           });
         },
 
         // ---- WebSocket ----
         connectWebSocket(sessionId) {
+          if (!sessionId) return;
           if (this.ws) {
-            this.ws.close();
+            try { this.ws.close(); } catch {}
           }
-          const url = this.wsBase + '/ws/' + sessionId;
-          this.ws = new WebSocket(url);
+          let base = this.wsBase;
+          if (!base || base.includes('localhost')) {
+            const proto = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
+            const host = (window.location.hostname === 'localhost' ? '127.0.0.1' : window.location.hostname) + ':' + (window.location.port || '8000');
+            base = proto + host;
+            this.wsBase = base;
+          }
+          let url = base + '/ws/' + sessionId;
+          // Browsers can't set headers on a WS upgrade, so pass the token as a
+          // query param (matches the server's auth check).
+          if (window.ARCANUM_TOKEN) url += '?token=' + encodeURIComponent(window.ARCANUM_TOKEN);
+          try {
+            this.ws = new WebSocket(url);
+          } catch (e) {
+            console.error('WebSocket creation error:', e);
+            this.wsConnected = false;
+            return;
+          }
 
           this.ws.onopen = () => {
             this.wsConnected = true;
-            this.messages.push({ type: 'info', content: 'WebSocket connected', timestamp: this.now() });
+            this.messages.push({ type: 'info', content: 'WebSocket conectado em tempo real', timestamp: this.now() });
           };
 
           this.ws.onmessage = (event) => {
@@ -966,13 +1250,14 @@
             this.scrollConsole();
           };
 
-          this.ws.onclose = () => {
+          this.ws.onclose = (event) => {
             this.wsConnected = false;
-            this.messages.push({ type: 'info', content: 'WebSocket disconnected', timestamp: this.now() });
+            this.messages.push({ type: 'info', content: 'WebSocket desconectado (código ' + event.code + ')', timestamp: this.now() });
           };
 
-          this.ws.onerror = () => {
+          this.ws.onerror = (err) => {
             this.wsConnected = false;
+            console.error('WebSocket error:', err);
           };
         },
 
@@ -981,32 +1266,82 @@
 
           switch (msg.type) {
             case 'thinking':
-              this.messages.push({ type: 'thinking', content: msg.content || 'Analyzing...', timestamp: ts });
+              this.agentBusy = true;
+              this.messages.push({ type: 'thinking', content: msg.content || 'Analisando...', timestamp: ts });
               break;
             case 'tool_call':
-              this.messages.push({ type: 'system', content: '[TOOL] ' + (msg.tool || '') + ': ' + (msg.content || JSON.stringify(msg.args || '')), timestamp: ts });
+              const expl = msg.content || (msg.explanation ? (msg.explanation.what + ' | Objetivo: ' + msg.explanation.why) : '');
+              this.messages.push({
+                type: 'system',
+                content: '[AÇÃO / FERRAMENTA] ' + (msg.tool || '') + (expl ? ' — ' + expl : '') + '\n  Parâmetros: ' + JSON.stringify(msg.arguments || msg.args || {}),
+                timestamp: ts
+              });
               break;
             case 'tool_result':
-              this.messages.push({ type: 'tool_result', content: msg.content || msg.output || '', timestamp: ts });
+              const out = msg.content || msg.output || (msg.result ? (msg.result.output || msg.result.stdout || JSON.stringify(msg.result)) : '');
+              if (out) {
+                const strOut = typeof out === 'object' ? JSON.stringify(out) : String(out);
+                this.messages.push({ type: 'tool_result', content: strOut, timestamp: ts });
+              }
+              if (this.currentSession) {
+                this.fetchSessionWiki();
+              }
+              break;
+            case 'phase_change':
+              const phaseNamesPt = {
+                'recon': 'RECONHECIMENTO',
+                'analysis': 'ANÁLISE DE VULNERABILIDADES',
+                'exploit': 'EXPLORAÇÃO CONTROLADA',
+                'report': 'RELATÓRIO FINAL'
+              };
+              const fromPhase = phaseNamesPt[msg.from] || (msg.from || '').toUpperCase();
+              const toPhase = phaseNamesPt[msg.to] || (msg.to || '').toUpperCase();
+              this.messages.push({ type: 'info', content: (msg.content || `[TRANSIÇÃO DE FASE] Avançando de ${fromPhase} para ${toPhase}`), timestamp: ts });
+              if (this.currentSession) {
+                this.currentSession.phase = msg.to;
+              }
+              break;
+            case 'checkpoint':
+              if (msg.evaluation && msg.evaluation.evaluation) {
+                this.messages.push({ type: 'info', content: `[AUTO-AVALIAÇÃO DO AGENTE]\n${msg.evaluation.evaluation}`, timestamp: ts });
+              }
               break;
             case 'assistant':
+            case 'response':
+              this.agentBusy = false;
               this.messages.push({ type: 'assistant', content: msg.content || '', timestamp: ts });
               break;
+            case 'suggestion':
+              this.agentBusy = false;
+              this.pendingApproval = true;
+              const riskPt = { 'LOW': 'BAIXO', 'MEDIUM': 'MÉDIO', 'HIGH': 'ALTO' }[msg.risk] || msg.risk || 'MÉDIO';
+              this.messages.push({
+                type: 'system',
+                content: '[SUGESTÃO / APROVAÇÃO NECESSÁRIA] Ferramenta: ' + (msg.tool || '') + ' (RISCO: ' + riskPt + ')\n' + (msg.message || ''),
+                timestamp: ts
+              });
+              break;
             case 'error':
-              this.messages.push({ type: 'error', content: msg.message || msg.content || 'Unknown error', timestamp: ts });
+              this.agentBusy = false;
+              this.messages.push({ type: 'error', content: msg.error || msg.message || msg.content || 'Erro inesperado', timestamp: ts });
               break;
             case 'finding':
-              this.messages.push({ type: 'system', content: '[FINDING] ' + (msg.severity || '').toUpperCase() + ': ' + (msg.title || ''), timestamp: ts });
+              const sevPt = this.getSeverityLabel(msg.finding?.severity || msg.severity);
+              this.messages.push({ type: 'system', content: `[VULNERABILIDADE DETECTADA] [${sevPt}] ${msg.finding?.title || msg.title || ''}`, timestamp: ts });
               this.fetchFindings();
               break;
             case 'approval_request':
               this.pendingApproval = true;
-              this.messages.push({ type: 'system', content: '[APPROVAL REQUIRED] ' + (msg.content || msg.action || ''), timestamp: ts });
+              this.messages.push({ type: 'system', content: '[APROVAÇÃO NECESSÁRIA] ' + (msg.content || msg.action || ''), timestamp: ts });
               break;
             case 'approved':
+              this.pendingApproval = false;
+              this.messages.push({ type: 'info', content: 'Ação aprovada pelo operador. Executando...', timestamp: ts });
+              break;
             case 'cancelled':
               this.pendingApproval = false;
-              this.messages.push({ type: 'info', content: msg.type.charAt(0).toUpperCase() + msg.type.slice(1), timestamp: ts });
+              this.agentBusy = false;
+              this.messages.push({ type: 'info', content: 'Ação cancelada pelo operador.', timestamp: ts });
               break;
             case 'progress':
               if (this.currentSession) {
@@ -1020,10 +1355,36 @@
 
         sendMessage(text) {
           if (!text || !text.trim()) return;
+
           if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-            this.showToast('Not connected to session', 'error');
+            if (this.ws && this.ws.readyState === WebSocket.CONNECTING) {
+              this.showToast('Conectando à sessão... aguarde um instante', 'info');
+              const self = this;
+              const prevOnOpen = this.ws.onopen;
+              this.ws.onopen = (e) => {
+                if (prevOnOpen) prevOnOpen(e);
+                self.sendMessage(text);
+              };
+              return;
+            }
+            if (this.currentSession && this.currentSession.id) {
+              this.showToast('Reconectando à sessão...', 'info');
+              this.connectWebSocket(this.currentSession.id);
+              const self = this;
+              setTimeout(() => {
+                if (self.ws && self.ws.readyState === WebSocket.OPEN) {
+                  self.sendMessage(text);
+                } else {
+                  self.showToast('Não foi possível conectar à sessão. Verifique o servidor.', 'error');
+                }
+              }, 800);
+              return;
+            }
+            this.showToast('Não conectado à sessão', 'error');
             return;
           }
+
+          this.agentBusy = true;
           this.messages.push({ type: 'user', content: text, timestamp: this.now() });
           this.ws.send(JSON.stringify({ type: 'chat', content: text }));
           this.scrollConsole();
@@ -1046,7 +1407,7 @@
         // ---- Reports ----
         async generateReport(sessionName, formats) {
           if (!sessionName || formats.length === 0) return;
-          this.showToast('Generating report...', 'info');
+          this.showToast('Gerando relatório...', 'info');
           const data = await this.apiFetch('/reports/generate', {
             method: 'POST',
             body: JSON.stringify({ session_name: sessionName, formats }),
@@ -1055,7 +1416,7 @@
             for (const [fmt, path] of Object.entries(data.reports)) {
               this.reports.push({ path, name: sessionName + '.' + fmt, format: fmt });
             }
-            this.showToast('Reports generated', 'success');
+            this.showToast('Relatórios gerados com sucesso!', 'success');
           }
         },
 
@@ -1077,11 +1438,127 @@
             body: JSON.stringify({ type, value, note }),
           });
           await this.fetchStash();
-          this.showToast('Stash item added', 'success');
+          this.showToast('Artefato salvo no cofre com sucesso!', 'success');
           this.showAddStash = false;
         },
 
-        // ---- Helpers ----
+        // ---- Wiki (Living Memory) ----
+        async fetchSessionWiki() {
+          if (!this.currentSession) return;
+          this.wikiLoading = true;
+          const data = await this.apiFetch('/sessions/' + encodeURIComponent(this.currentSession.name) + '/wiki');
+          if (data && data.wiki) {
+            this.sessionWiki = data.wiki;
+            this.wikiLastUpdated = this.now();
+          }
+          this.wikiLoading = false;
+        },
+
+        // ---- Playbooks (Continuous Learning) ----
+        async fetchPlaybooks(query = '') {
+          this.playbookLoading = true;
+          const q = query ? '?q=' + encodeURIComponent(query) : '';
+          const data = await this.apiFetch('/playbooks' + q);
+          if (data && data.playbooks) {
+            this.playbooks = data.playbooks;
+          }
+          this.playbookLoading = false;
+        },
+
+        async savePlaybook() {
+          if (!this.newPlaybook.title || !this.newPlaybook.steps) return;
+          const data = await this.apiFetch('/playbooks', {
+            method: 'POST',
+            body: JSON.stringify(this.newPlaybook),
+          });
+          if (data) {
+            this.showToast('Playbook tático salvo na Base de Conhecimento!', 'success');
+            this.showNewPlaybook = false;
+            this.newPlaybook = { title: '', category: 'web', trigger: '', steps: '', tools: '', notes: '' };
+            await this.fetchPlaybooks();
+          }
+        },
+
+        // ---- Helpers & Localization ----
+        getStatusLabel(status) {
+          const map = {
+            running: 'Executando',
+            paused: 'Pausada',
+            created: 'Criada',
+            complete: 'Concluída',
+          };
+          return map[status] || status || 'Criada';
+        },
+
+        getSeverityLabel(sev) {
+          const map = {
+            critical: 'CRÍTICA',
+            high: 'ALTA',
+            medium: 'MÉDIA',
+            low: 'BAIXA',
+            info: 'INFO',
+          };
+          return map[(sev || '').toLowerCase()] || (sev || 'INFO').toUpperCase();
+        },
+
+        getStashTypeLabel(type) {
+          const map = {
+            credential: 'Credencial',
+            hash: 'Hash',
+            host: 'Host / IP',
+            range: 'Faixa IP',
+            payload: 'Payload',
+            script: 'Script',
+            token: 'Token API',
+          };
+          return map[type] || type;
+        },
+
+        getCategoryLabel(cat) {
+          const map = {
+            recon: 'Reconhecimento',
+            web: 'Web',
+            bypass: 'Bypass / WAF',
+            exploit: 'Exploração',
+            privesc: 'Escalação',
+            ad: 'Active Directory',
+            general: 'Geral',
+          };
+          return map[cat] || cat;
+        },
+
+        getTabLabel(tab) {
+          const map = {
+            console: 'Terminal & Chat',
+            wiki: 'Memória Viva (Wiki)',
+            recon: 'Reconhecimento',
+            web: 'Aplicações Web',
+            network: 'Rede & Infra',
+            creds: 'Credenciais',
+            exploit: 'Exploração',
+            post: 'Pós-Exploração',
+            osint: 'Inteligência (OSINT)',
+            findings: 'Vulnerabilidades',
+          };
+          return map[tab] || tab;
+        },
+
+        getTabTooltip(tab) {
+          const map = {
+            console: 'Console interativo em tempo real para comandos, raciocínio do modelo e histórico',
+            wiki: 'Caderno operacional dinâmico com mapa de alvos, portas e superfície de ataque',
+            recon: 'Mapeamento e enumeração de subdomínios, DNS e hosts da rede',
+            web: 'Varredura de endpoints HTTP, tecnologias e diretórios web',
+            network: 'Varredura de portas TCP/UDP e serviços de infraestrutura',
+            creds: 'Gerenciamento de credenciais, chaves e hashes descobertos',
+            exploit: 'Validação e testes de exploração controlados com prova de conceito',
+            post: 'Avaliação de privilégios e persistência autorizada',
+            osint: 'Coleta de fontes abertas, dados de registro e pegada digital',
+            findings: 'Relatório de achados e vulnerabilidades verificadas nesta sessão',
+          };
+          return map[tab] || 'Aba operacional ' + tab;
+        },
+
         updateStats() {
           const targets = new Set(this.sessions.map(s => s.target).filter(Boolean));
           const sevCounts = {};
@@ -1108,6 +1585,33 @@
           return map[sev] || map.info;
         },
 
+        formatCwe(cwe) {
+          if (!cwe) return 'N/A';
+          if (Array.isArray(cwe)) return cwe.join(', ') || 'N/A';
+          if (typeof cwe === 'string') {
+            try {
+              const parsed = JSON.parse(cwe);
+              if (Array.isArray(parsed)) return parsed.join(', ') || 'N/A';
+            } catch {}
+            return cwe || 'N/A';
+          }
+          return String(cwe);
+        },
+
+        formatAffected(affected) {
+          if (!affected) return '-';
+          if (Array.isArray(affected)) return affected[0] || '-';
+          if (typeof affected === 'object') return affected.url || affected.host || affected.target || Object.values(affected)[0] || '-';
+          if (typeof affected === 'string') {
+            try {
+              const parsed = JSON.parse(affected);
+              return this.formatAffected(parsed);
+            } catch {}
+            return affected;
+          }
+          return String(affected);
+        },
+
         maskValue(item) {
           if (['credential', 'token', 'hash'].includes(item.type) && item.value) {
             if (item.value.length <= 6) return '******';
@@ -1122,17 +1626,17 @@
             const d = new Date(dt);
             const now = new Date();
             const diff = Math.floor((now - d) / 1000);
-            if (diff < 60) return diff + 's ago';
-            if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
-            if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
-            return d.toLocaleDateString();
+            if (diff < 60) return diff + 's atrás';
+            if (diff < 3600) return Math.floor(diff / 60) + 'm atrás';
+            if (diff < 86400) return Math.floor(diff / 3600) + 'h atrás';
+            return d.toLocaleDateString('pt-BR');
           } catch {
             return dt;
           }
         },
 
         now() {
-          return new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+          return new Date().toLocaleTimeString('pt-BR', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
         },
 
         scrollConsole() {

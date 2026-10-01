@@ -5,7 +5,72 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
+
+
+import re
+
+_SESSION_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+
+def validate_session_name(name: str) -> str:
+    """Enforce a safe, filesystem-only session name. The name becomes a path
+    component under ops_dir, so ``..`` / slashes / absolute paths are rejected
+    (validated as directory traversal before this guard)."""
+    name = (name or "").strip()
+    if not _SESSION_NAME_RE.match(name) or name in (".", ".."):
+        raise ValueError(
+            "Invalid session name: use 1-64 chars of letters, digits, '.', '_' or '-'"
+        )
+    return name
+
+
+def init_session_workspace(name: str, target: str = None, mode: str = "manual", scope: dict = None) -> Path:
+    """Initialize workspace directories and episodic wiki templates."""
+    from ..core.config import get_config
+    name = validate_session_name(name)
+    config = get_config()
+    op_dir = config.ops_dir / name
+    for subdir in ["workspace/wiki", "workspace/output", "workspace/tools", "workspace/evidence", "findings", "reports"]:
+        (op_dir / subdir).mkdir(parents=True, exist_ok=True)
+
+    wiki_dir = op_dir / "workspace" / "wiki"
+    target_map = wiki_dir / "TARGET_MAP.md"
+    if not target_map.exists():
+        target_map.write_text(f"""# Target Map — Operation: {name}
+- Target: {target or 'N/A'}
+- Mode: {mode}
+- Scope: {json.dumps(scope) if scope else 'All authorized assets'}
+
+## Discovered Hosts & Ports
+| Host / IP | Port | Service | Product / Version | Notes |
+| :--- | :--- | :--- | :--- | :--- |
+| {target or 'target'} | - | - | - | Initial Target |
+""", encoding="utf-8")
+
+    attack_surface = wiki_dir / "ATTACK_SURFACE.md"
+    if not attack_surface.exists():
+        attack_surface.write_text(f"""# Attack Surface — Operation: {name}
+
+## Discovered Endpoints & Parameters
+| URL / Endpoint | Method | Parameters | Auth Required | Status |
+| :--- | :--- | :--- | :--- | :--- |
+
+## Technologies Detected
+- Target: {target or 'N/A'}
+""", encoding="utf-8")
+
+    operation_log = wiki_dir / "OPERATION_LOG.md"
+    if not operation_log.exists():
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        operation_log.write_text(f"""# Operation Log — Operation: {name}
+
+## Chronological Milestones
+- [{now}] Operation initialized against target: {target or 'N/A'}.
+""", encoding="utf-8")
+
+    return op_dir
 
 
 class SessionManager:
@@ -24,6 +89,7 @@ class SessionManager:
         mode: str = "manual",
         scope: dict = None,
     ) -> dict:
+        name = validate_session_name(name)
         session_id = self._generate_id()
         now = datetime.now(timezone.utc).isoformat()
         await self.db.execute(
@@ -31,6 +97,9 @@ class SessionManager:
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (session_id, name, target, mode, "created", json.dumps(scope) if scope else None, now, now),
         )
+        # Initialize operation workspace & episodic wiki
+        init_session_workspace(name=name, target=target, mode=mode, scope=scope)
+
         return {
             "id": session_id, "name": name, "target": target,
             "mode": mode, "status": "created", "scope": scope,

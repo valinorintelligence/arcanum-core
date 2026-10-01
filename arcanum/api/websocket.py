@@ -46,6 +46,16 @@ manager = ConnectionManager()
 
 @router.websocket("/ws/{session_id}")
 async def websocket_endpoint(websocket: WebSocket, session_id: str):
+    # Authenticate before accepting: the browser can't set headers on a WS
+    # upgrade, so the token comes as a ?token= query param (same secret the UI
+    # received via window.ARCANUM_TOKEN).
+    from .auth import token_valid
+    expected = getattr(websocket.app.state, "api_token", "") or ""
+    provided = websocket.query_params.get("token")
+    if not token_valid(expected, provided):
+        await websocket.close(code=1008)  # policy violation
+        return
+
     await manager.connect(session_id, websocket)
     try:
         while True:
@@ -66,16 +76,48 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                     # Create a basic engine (sandbox/browser setup would be more complex in production)
                     from ..agent.tools import ToolExecutor
                     tool_executor = ToolExecutor(
-                        sandbox=None, browser=None,
+                        sandbox=getattr(app.state, "sandbox", None),
+                        browser=getattr(app.state, "browser", None),
                         workspace_dir=get_config().ops_dir / session.get("name", "default") / "workspace",
                         db=app.state.db,
+                        cve_kb=getattr(app.state, "cve_kb", None),
+                        stash_mgr=getattr(app.state, "stash_mgr", None),
+                        alert_engine=getattr(app.state, "alert_engine", None),
+                        session_id=session.get("id"),
                     )
                     engine = AgentEngine(
                         llm=app.state.llm,
                         tool_executor=tool_executor,
                         session=session,
+                        deep_llm=getattr(app.state, "deep_llm", None),
                     )
                     app.state.active_engines[session_id] = engine
+
+                # Check if chat message is a conversational approval or rejection for a pending action
+                clean_input = user_input.strip().lower().rstrip(".!?,")
+                affirmative_phrases = {
+                    "pode fazer", "pode executar", "pode", "sim", "ok", "autorizado",
+                    "aprovar", "aprovado", "prossiga", "executa", "executar", "confirmo",
+                    "vai", "faça", "fazer", "manda ver", "com certeza", "positivo", "bora",
+                    "pode rodar", "roda", "rodar", "pode sim", "claro", "sim pode", "pode ir"
+                }
+                cancel_phrases = {
+                    "recusar", "cancelar", "cancela", "não", "nao", "aborta", "abortar", "não faça", "nao faca"
+                }
+
+                if engine.pending_action and clean_input in affirmative_phrases:
+                    await manager.broadcast(session_id, {"type": "approved", "content": "Ação aprovada pelo operador"})
+                    try:
+                        async for event in engine.execute_approved():
+                            await manager.broadcast(session_id, event)
+                    except Exception as e:
+                        await websocket.send_json({"type": "error", "message": str(e)})
+                    continue
+
+                if engine.pending_action and clean_input in cancel_phrases:
+                    cancelled_tool = engine.cancel_pending()
+                    await manager.broadcast(session_id, {"type": "cancelled", "content": f"Ação {cancelled_tool} cancelada pelo operador"})
+                    continue
 
                 # Stream agent events
                 try:
@@ -85,11 +127,37 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                     await websocket.send_json({"type": "error", "message": str(e)})
 
             elif msg_type == "approve":
-                # Handle copilot approval
-                await manager.broadcast(session_id, {"type": "approved", "content": "Action approved"})
+                # Handle copilot / manual approval
+                app = websocket.app
+                engine = app.state.active_engines.get(session_id)
+                if engine and engine.pending_action:
+                    await manager.broadcast(session_id, {"type": "approved", "content": "Action approved by operator"})
+                    try:
+                        async for event in engine.execute_approved():
+                            await manager.broadcast(session_id, event)
+                    except Exception as e:
+                        await websocket.send_json({"type": "error", "message": str(e)})
+                else:
+                    await manager.broadcast(session_id, {"type": "info", "content": "No action pending approval"})
 
             elif msg_type == "cancel":
-                await manager.broadcast(session_id, {"type": "cancelled", "content": "Action cancelled"})
+                # Handle cancellation
+                app = websocket.app
+                engine = app.state.active_engines.get(session_id)
+                if engine and engine.pending_action:
+                    cancelled_tool = engine.cancel_pending()
+                    await manager.broadcast(session_id, {"type": "cancelled", "content": f"Action {cancelled_tool} cancelled by operator"})
+                else:
+                    await manager.broadcast(session_id, {"type": "info", "content": "No action pending cancellation"})
 
     except WebSocketDisconnect:
         manager.disconnect(session_id, websocket)
+        # Drop the per-session engine once no sockets remain, so engines (and
+        # their message history) don't accumulate unbounded across reconnects.
+        # The sandbox is a shared singleton, so it is NOT torn down here (that
+        # happens at app shutdown); only the engine is released.
+        if session_id not in manager.active:
+            try:
+                websocket.app.state.active_engines.pop(session_id, None)
+            except Exception:
+                pass

@@ -57,15 +57,19 @@ class ArcanumConfig(BaseSettings):
 
     model_config = {"env_prefix": "ARCANUM_"}
 
-    # Ollama / LLM
+    # Ollama / LLM (Hybrid Tier Architecture)
     ollama_url: str = "http://localhost:11434"
-    ollama_model: str = "qwen3:32b"
-    ollama_timeout: float = 300.0
+    ollama_model: str = "qwen2.5-coder:7b"
+    ollama_fast_model: str = "qwen2.5-coder:7b"
+    ollama_deep_model: str = "qwen3:32b"
+    ollama_fast_predict: int = 256
+    ollama_deep_predict: int = 1024
+    ollama_timeout: float = 600.0
     ollama_chunk_timeout: float = 180.0
-    ollama_num_ctx: int = 131072
+    ollama_num_ctx: int = 8192
     ollama_temperature: float = 0.15
-    ollama_num_predict: int = 32768
-    ollama_enable_thinking: bool = True
+    ollama_num_predict: int = 256
+    ollama_enable_thinking: bool = False
     ollama_repeat_penalty: float = 1.05
 
     # Sandbox
@@ -78,7 +82,19 @@ class ArcanumConfig(BaseSettings):
 
     # Web server
     web_port: int = 8000
-    web_host: str = "0.0.0.0"
+    # Bind to loopback by default. The API has no network-level isolation of
+    # its own; exposing it on 0.0.0.0 publishes an unauthenticated agent that
+    # can drive security tooling. For remote access put it behind a reverse
+    # proxy with TLS + auth and set api_token.
+    web_host: str = "127.0.0.1"
+    # Shared secret required by every API route and the WebSocket. If left
+    # empty a random token is generated per process at startup (printed once)
+    # and injected into the bundled frontend so the local UI works out of the
+    # box. Set a fixed value for remote/proxied deployments.
+    api_token: str = ""
+
+    # Demo data is seeded only when this is true (never silently in prod).
+    seed_demo: bool = False
 
     # Agent
     max_context_tokens: int = 32000

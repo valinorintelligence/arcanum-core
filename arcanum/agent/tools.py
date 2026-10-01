@@ -482,17 +482,26 @@ class ToolExecutor:
 
     # -- create_file / read_file: workspace file operations --------------------
 
+    def _safe_path(self, rel: str) -> Path:
+        """Resolve ``rel`` strictly inside the workspace. Rejects absolute paths
+        and ``..`` traversal (both validated as arbitrary read/write before)."""
+        base = self.workspace_dir.resolve()
+        candidate = (base / rel).resolve()
+        if candidate != base and base not in candidate.parents:
+            raise ValueError(f"Path escapes workspace: {rel!r}")
+        return candidate
+
     async def _handle_create_file(self, path: str, content: str) -> dict:
-        full_path = self.workspace_dir / path
+        full_path = self._safe_path(path)
         full_path.parent.mkdir(parents=True, exist_ok=True)
         full_path.write_text(content)
         return {"path": path, "bytes_written": len(content), "full_path": str(full_path)}
 
     async def _handle_read_file(self, path: str) -> dict:
-        full_path = self.workspace_dir / path
+        full_path = self._safe_path(path)
         if not full_path.is_file():
             # Also check workspace/output
-            alt_path = self.workspace_dir / "output" / path
+            alt_path = self._safe_path(str(Path("output") / path))
             if alt_path.is_file():
                 full_path = alt_path
             else:

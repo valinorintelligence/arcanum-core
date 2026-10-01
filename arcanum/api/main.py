@@ -1,9 +1,10 @@
 """FastAPI application for Arcanum Core Web UI."""
 import asyncio
+import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -44,14 +45,49 @@ async def lifespan(app: FastAPI):
     app.state.alert_engine = AlertEngine()
     app.state.report_engine = ReportEngine()
 
-    # Initialize LLM client
+    # Initialize Playbook KB
+    from ..core.playbooks import PlaybookManager
+    pm = PlaybookManager(db)
+    try:
+        await pm.seed_defaults_if_empty()
+    except Exception:
+        pass
+    app.state.playbook_mgr = pm
+
+    # Initialize Docker Sandbox
+    try:
+        from ..sandbox.docker import SandboxManager
+        sandbox = SandboxManager(
+            image=config.sandbox_image,
+            timeout=config.sandbox_timeout,
+        )
+        if await sandbox.ensure_image():
+            app.state.sandbox = sandbox
+        else:
+            app.state.sandbox = None
+    except Exception:
+        app.state.sandbox = None
+
+    # Initialize Fast LLM client (tactical: recon, scans, tool calls)
     app.state.llm = OllamaClient(
         base_url=config.ollama_url,
-        model=config.ollama_model,
+        model=config.ollama_fast_model,
         timeout=config.ollama_timeout,
         num_ctx=config.ollama_num_ctx,
         temperature=config.ollama_temperature,
-        num_predict=config.ollama_num_predict,
+        num_predict=config.ollama_fast_predict,
+        repeat_penalty=config.ollama_repeat_penalty,
+        enable_thinking=config.ollama_enable_thinking,
+    )
+
+    # Initialize Deep LLM client (strategic: exploit planning, reports, reflection)
+    app.state.deep_llm = OllamaClient(
+        base_url=config.ollama_url,
+        model=config.ollama_deep_model,
+        timeout=config.ollama_timeout,
+        num_ctx=config.ollama_num_ctx,
+        temperature=config.ollama_temperature,
+        num_predict=config.ollama_deep_predict,
         repeat_penalty=config.ollama_repeat_penalty,
         enable_thinking=config.ollama_enable_thinking,
     )
@@ -59,14 +95,26 @@ async def lifespan(app: FastAPI):
     # Active sessions/engines
     app.state.active_engines = {}
 
-    # Seed demo data on first run
-    try:
-        result = await seed_all_demo_data(db, cve_kb)
-        if any(v > 0 for v in result.values()):
-            import logging
-            logging.getLogger("arcanum").info(f"Demo data seeded: {result}")
-    except Exception:
-        pass  # Non-fatal — demo data is optional
+    # API access token: use configured value or generate one per process.
+    import logging
+    import secrets
+    _log = logging.getLogger("arcanum")
+    app.state.api_token = config.api_token or secrets.token_urlsafe(32)
+    if not config.api_token:
+        _log.warning(
+            "ARCANUM_API_TOKEN not set — generated an ephemeral token for this "
+            "run. The bundled UI receives it automatically; external clients "
+            "use: Authorization: Bearer %s", app.state.api_token,
+        )
+
+    # Seed demo data only when explicitly requested (never silently in prod).
+    if config.seed_demo:
+        try:
+            result = await seed_all_demo_data(db, cve_kb)
+            if any(v > 0 for v in result.values()):
+                _log.info(f"Demo data seeded: {result}")
+        except Exception:
+            pass  # Non-fatal — demo data is optional
 
     yield
 
@@ -74,6 +122,8 @@ async def lifespan(app: FastAPI):
     await db.close()
     await cve_kb.close()
     await app.state.llm.close()
+    if hasattr(app.state, "deep_llm") and app.state.deep_llm:
+        await app.state.deep_llm.close()
 
 
 def create_app() -> FastAPI:
@@ -84,22 +134,32 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # CORS
+    # CORS: the bundled UI is same-origin, so default to loopback origins only.
+    # A wildcard with credentials is invalid per the CORS spec anyway. Override
+    # via ARCANUM_CORS_ORIGINS (comma-separated) for a proxied deployment.
+    import os
+    cors_env = os.environ.get("ARCANUM_CORS_ORIGINS", "")
+    allow_origins = [o.strip() for o in cors_env.split(",") if o.strip()] or [
+        "http://localhost:8000", "http://127.0.0.1:8000",
+    ]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=allow_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
 
-    # API routes
-    app.include_router(sessions.router, prefix="/api/sessions", tags=["sessions"])
-    app.include_router(tools.router, prefix="/api/tools", tags=["tools"])
-    app.include_router(findings.router, prefix="/api/findings", tags=["findings"])
-    app.include_router(stash.router, prefix="/api/stash", tags=["stash"])
-    app.include_router(cve.router, prefix="/api/cve", tags=["cve"])
-    app.include_router(reports.router, prefix="/api/reports", tags=["reports"])
+    from .auth import require_token
+    auth = [Depends(require_token)]
+
+    # API routes (all require a valid token)
+    app.include_router(sessions.router, prefix="/api/sessions", tags=["sessions"], dependencies=auth)
+    app.include_router(tools.router, prefix="/api/tools", tags=["tools"], dependencies=auth)
+    app.include_router(findings.router, prefix="/api/findings", tags=["findings"], dependencies=auth)
+    app.include_router(stash.router, prefix="/api/stash", tags=["stash"], dependencies=auth)
+    app.include_router(cve.router, prefix="/api/cve", tags=["cve"], dependencies=auth)
+    app.include_router(reports.router, prefix="/api/reports", tags=["reports"], dependencies=auth)
     app.include_router(ws_router)
 
     # Health check
@@ -113,10 +173,12 @@ def create_app() -> FastAPI:
             "status": "ok",
             "version": "3.0.0",
             "llm_connected": llm_ok,
+            "fast_model": getattr(app.state.llm, "model", None),
+            "deep_model": getattr(getattr(app.state, "deep_llm", None), "model", None),
         }
 
     # Dashboard stats
-    @app.get("/api/stats")
+    @app.get("/api/stats", dependencies=auth)
     async def stats():
         sessions = await app.state.db.fetch_all("SELECT status FROM sessions")
         findings = await app.state.db.fetch_all("SELECT severity FROM findings")
@@ -143,8 +205,35 @@ def create_app() -> FastAPI:
             "cves": cve_count,
         }
 
+    # Playbooks endpoints
+    @app.get("/api/playbooks", dependencies=auth)
+    async def get_playbooks(q: str = ""):
+        from ..core.playbooks import PlaybookManager
+        pm = PlaybookManager(app.state.db)
+        results = await pm.search(q, limit=50)
+        return {"playbooks": results}
+
+    @app.post("/api/playbooks", dependencies=auth)
+    async def create_playbook(body: dict):
+        from ..core.playbooks import PlaybookManager
+        pm = PlaybookManager(app.state.db)
+        tools = body.get("tools", [])
+        if isinstance(tools, str):
+            tools = [t.strip() for t in tools.split(",") if t.strip()]
+        res = await pm.save_playbook(
+            title=body.get("title", "Untitled Playbook"),
+            category=body.get("category", "general"),
+            trigger=body.get("trigger", ""),
+            steps=body.get("steps", ""),
+            tools=tools,
+            notes=body.get("notes", ""),
+            author=body.get("author", "operator"),
+        )
+        return {"playbook": res}
+
+
     # Demo seed endpoint
-    @app.post("/api/demo/seed")
+    @app.post("/api/demo/seed", dependencies=auth)
     async def demo_seed():
         from ..core.demo_data import seed_all_demo_data
         result = await seed_all_demo_data(app.state.db, app.state.cve_kb)
@@ -163,7 +252,23 @@ def create_app() -> FastAPI:
 
         @app.get("/")
         async def serve_frontend():
-            return FileResponse(frontend_dir / "index.html")
+            # Inject the per-process API token so the same-origin UI can
+            # authenticate without the operator copying it by hand. Served over
+            # loopback by default; for remote exposure protect "/" at the proxy.
+            from fastapi.responses import HTMLResponse
+            html = (frontend_dir / "index.html").read_text(encoding="utf-8")
+            token = getattr(app.state, "api_token", "") or ""
+            inject = f'<script>window.ARCANUM_TOKEN={json.dumps(token)};</script>'
+            if "</head>" in html:
+                html = html.replace("</head>", inject + "</head>", 1)
+            else:
+                html = inject + html
+            return HTMLResponse(html)
+
+        @app.get("/favicon.ico", include_in_schema=False)
+        async def favicon():
+            from fastapi.responses import Response
+            return Response(status_code=204)
 
     return app
 

@@ -29,9 +29,12 @@ async def list_sessions(request: Request):
 
 @router.post("/")
 async def create_session(request: Request, body: CreateSessionRequest):
-    session = await request.app.state.session_mgr.create_session(
-        name=body.name, target=body.target, mode=body.mode, scope=body.scope,
-    )
+    try:
+        session = await request.app.state.session_mgr.create_session(
+            name=body.name, target=body.target, mode=body.mode, scope=body.scope,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     return {"session": session}
 
 
@@ -58,3 +61,26 @@ async def delete_session(request: Request, name: str):
     if not deleted:
         raise HTTPException(404, "Session not found")
     return {"status": "deleted"}
+
+
+@router.get("/{name}/wiki")
+async def get_session_wiki(request: Request, name: str):
+    """Retrieve operational wiki sections (TARGET_MAP, ATTACK_SURFACE, OPERATION_LOG)."""
+    session = await request.app.state.session_mgr.get_session(name)
+    if not session:
+        raise HTTPException(404, "Session not found")
+    from ...core.config import get_config
+    op_name = session.get("name", name)
+    wiki_dir = get_config().ops_dir / op_name / "workspace" / "wiki"
+    wiki_dir.mkdir(parents=True, exist_ok=True)
+
+    sections = {}
+    for filename in ["TARGET_MAP.md", "ATTACK_SURFACE.md", "OPERATION_LOG.md"]:
+        fpath = wiki_dir / filename
+        key = filename.replace(".md", "").lower()
+        if fpath.exists():
+            sections[key] = fpath.read_text(encoding="utf-8")
+        else:
+            sections[key] = ""
+    return {"wiki": sections}
+

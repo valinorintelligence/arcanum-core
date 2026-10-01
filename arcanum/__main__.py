@@ -300,11 +300,17 @@ def demo_seed_cmd():
 
 @main.command()
 @click.option("--port", "-p", default=8000, help="Port to serve on")
-@click.option("--host", "-h", default="0.0.0.0", help="Host to bind to")
+@click.option("--host", "-h", default="127.0.0.1",
+              help="Host to bind to (default loopback; use 0.0.0.0 only behind a proxy)")
 def serve(port: int, host: str):
     """Start the web UI server."""
     import uvicorn
 
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        click.echo(
+            "[WARN] Binding to a non-loopback address exposes the API. "
+            "Ensure ARCANUM_API_TOKEN is set and a TLS proxy is in front."
+        )
     click.echo(f"Starting Arcanum Core Web UI on http://{host}:{port}")
     uvicorn.run("arcanum.api.main:app", host=host, port=port, reload=False)
 

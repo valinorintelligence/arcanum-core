@@ -249,9 +249,20 @@ class ReportEngine:
     """Generates security assessment reports in multiple formats."""
 
     def __init__(self):
-        self.env = Environment(loader=BaseLoader(), autoescape=False)
+        # autoescape=True: finding fields (title, evidence request/response, PoC,
+        # remediation) are derived from untrusted target output processed by the
+        # LLM. Without escaping, a malicious target could inject <script> into the
+        # generated HTML/PDF report (stored XSS when the operator opens it).
+        from jinja2 import select_autoescape
+        self.env = Environment(
+            loader=BaseLoader(),
+            autoescape=select_autoescape(default_for_string=True, default=True),
+        )
         self.html_template = self.env.from_string(REPORT_HTML_TEMPLATE)
-        self.md_template = self.env.from_string(REPORT_MD_TEMPLATE)
+        # Markdown output must NOT HTML-escape (it would corrupt the text), so
+        # render it with a separate non-escaping environment.
+        self._md_env = Environment(loader=BaseLoader(), autoescape=False)
+        self.md_template = self._md_env.from_string(REPORT_MD_TEMPLATE)
 
     def _prepare_context(self, session: dict, findings: list[dict], config: ReportConfig) -> dict:
         counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
