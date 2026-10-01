@@ -122,9 +122,15 @@ class AgentEngine:
                 # Hybrid routing: fast tactical tier for recon/scan tools, deep tier for exploit/report
                 active_llm = self.deep_llm if self.current_phase in ("exploit", "report") else self.llm
                 active_tools = get_tools_for_phase(self.current_phase)
+                # Constrain the fast tool-calling phases to JSON output: weak
+                # local models otherwise emit a long tutorial instead of a tool
+                # call (measured 37s+/turn -> ~6-8s with format=json). The deep
+                # exploit/report phases stay free-text so they can write prose.
+                fmt = "json" if self.current_phase in ("recon", "analysis") else None
                 response_msg = await active_llm.chat(
                     messages=self.messages,
                     tools=active_tools,
+                    fmt=fmt,
                 )
 
                 # --- Extended thinking extraction ---
@@ -146,6 +152,10 @@ class AgentEngine:
                 # No tool calls — final text response
                 if not tool_calls:
                     final_text = clean_content or content or thinking or "Análise concluída."
+                    # With format=json the model may return a JSON object that
+                    # isn't a tool call (e.g. a final summary). Surface a
+                    # human-readable field instead of dumping raw JSON.
+                    final_text = self._humanize_final_text(final_text)
                     self.messages.append({"role": "assistant", "content": final_text})
                     yield {"type": "response", "content": final_text}
                     return
@@ -462,6 +472,30 @@ class AgentEngine:
             except Exception:
                 pos = idx + 1
         return calls
+
+    @staticmethod
+    def _humanize_final_text(text: str) -> str:
+        """If ``text`` is a JSON object (a side effect of format=json), return a
+        human-readable field instead of raw JSON; otherwise return it as-is."""
+        if not text:
+            return text
+        t = text.strip()
+        if not (t.startswith("{") and t.endswith("}")):
+            return text
+        try:
+            data = json.loads(t)
+        except Exception:
+            return text
+        if not isinstance(data, dict):
+            return text
+        for key in ("message", "content", "response", "resposta", "mensagem",
+                    "summary", "resumo", "conclusao", "conclusão", "text", "answer"):
+            val = data.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+        # Fall back to joining any string values; else a friendly default.
+        strings = [v.strip() for v in data.values() if isinstance(v, str) and v.strip()]
+        return " ".join(strings) if strings else "Análise concluída."
 
     def _clean_explanatory_text(self, content: str) -> str:
         """Strip raw JSON tool call blocks and <think> tags to leave genuine human-readable text."""

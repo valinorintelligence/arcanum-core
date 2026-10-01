@@ -15,12 +15,12 @@ class OllamaClient:
         self,
         base_url: str = "http://localhost:11434",
         model: str = "qwen3:32b",
-        timeout: float = 300.0,
-        num_ctx: int = 131072,
+        timeout: float = 600.0,
+        num_ctx: int = 8192,
         temperature: float = 0.15,
-        num_predict: int = 32768,
+        num_predict: int = 2048,
         repeat_penalty: float = 1.05,
-        enable_thinking: bool = True,
+        enable_thinking: bool = False,
     ):
         self.base_url = base_url.rstrip("/")
         self.model = model
@@ -35,12 +35,22 @@ class OllamaClient:
         self,
         messages: list[dict],
         tools: list[dict] | None = None,
+        fmt: str | None = None,
     ) -> dict:
-        """Send a chat completion request to Ollama. Returns the response message."""
+        """Send a chat completion request to Ollama. Returns the response message.
+
+        ``fmt="json"`` constrains the model to emit valid JSON. For weak local
+        models (e.g. qwen2.5-coder:7b) this is what makes them emit a compact
+        tool call instead of a long free-text tutorial — ~5x faster per turn
+        and far more reliable (measured). Narration to the operator is produced
+        separately by the engine (deterministic pt-BR), so no UX is lost.
+        """
         payload: dict = {
             "model": self.model,
             "messages": messages,
             "stream": False,
+            "think": self.enable_thinking,
+            "keep_alive": -1,
             "options": {
                 "num_ctx": self.num_ctx,
                 "temperature": self.temperature,
@@ -50,8 +60,8 @@ class OllamaClient:
         }
         if tools:
             payload["tools"] = tools
-        if self.enable_thinking:
-            payload["options"]["num_predict"] = max(self.num_predict, 16384)
+        if fmt:
+            payload["format"] = fmt
 
         resp = await self._client.post("/api/chat", json=payload)
         resp.raise_for_status()
@@ -68,6 +78,8 @@ class OllamaClient:
             "model": self.model,
             "messages": messages,
             "stream": True,
+            "think": self.enable_thinking,
+            "keep_alive": -1,
             "options": {
                 "num_ctx": self.num_ctx,
                 "temperature": self.temperature,

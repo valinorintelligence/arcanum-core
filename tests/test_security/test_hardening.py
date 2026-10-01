@@ -108,7 +108,7 @@ def test_extractor_returns_all_inline_calls():
 async def test_stagnation_guard_aborts_repeated_command(tmp_path):
     class FakeLLM:
         enable_thinking = False
-        async def chat(self, messages, tools=None):
+        async def chat(self, messages, tools=None, fmt=None):
             return {"content": '{"name":"execute","arguments":{"command":"subfinder -d x.com"}}'}
 
     class FakeExec:
