@@ -18,18 +18,12 @@ NATIVE_TOOLS: list[dict] = [
         "type": "function",
         "function": {
             "name": "execute",
-            "description": "Run a shell command inside the Docker sandbox environment. Use this for all security tools (nmap, subfinder, nuclei, sqlmap, etc).",
+            "description": "Run a shell command inside Docker sandbox (e.g. 'subfinder -d <target>', 'httpx -u <target>', 'nmap -sV -p 80,443 <target>', 'nuclei -u <target>').",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "command": {
-                        "type": "string",
-                        "description": "The shell command to execute.",
-                    },
-                    "timeout": {
-                        "type": "integer",
-                        "description": "Maximum execution time in seconds (default 300, max 900).",
-                    },
+                    "command": {"type": "string", "description": "Shell command to execute."},
+                    "timeout": {"type": "integer", "description": "Timeout in seconds (default 300)."},
                 },
                 "required": ["command"],
             },
@@ -39,18 +33,14 @@ NATIVE_TOOLS: list[dict] = [
         "type": "function",
         "function": {
             "name": "browser_action",
-            "description": "Perform a headless browser automation action for JavaScript rendering, form interaction, and authentication workflows.",
+            "description": "Perform headless browser action.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "action": {
-                        "type": "string",
-                        "enum": ["navigate", "click", "type", "screenshot", "get_text", "get_source"],
-                        "description": "The browser action to perform.",
-                    },
-                    "url": {"type": "string", "description": "URL to navigate to (for navigate action)."},
-                    "selector": {"type": "string", "description": "CSS selector for the target element."},
-                    "text": {"type": "string", "description": "Text to type (for type action)."},
+                    "action": {"type": "string", "enum": ["navigate", "click", "type", "screenshot", "get_text", "get_source"]},
+                    "url": {"type": "string", "description": "URL to navigate to."},
+                    "selector": {"type": "string", "description": "Target CSS selector."},
+                    "text": {"type": "string", "description": "Text to type."},
                 },
                 "required": ["action"],
             },
@@ -60,12 +50,12 @@ NATIVE_TOOLS: list[dict] = [
         "type": "function",
         "function": {
             "name": "web_search",
-            "description": "Search the web for CVEs, bypass techniques, exploits, and security advisories.",
+            "description": "Search the web for CVEs, exploits, or security advisories.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "The search query."},
-                    "num_results": {"type": "integer", "description": "Number of results to return.", "default": 5},
+                    "query": {"type": "string", "description": "Search query."},
+                    "num_results": {"type": "integer", "description": "Max results (default 5)."},
                 },
                 "required": ["query"],
             },
@@ -75,12 +65,12 @@ NATIVE_TOOLS: list[dict] = [
         "type": "function",
         "function": {
             "name": "create_file",
-            "description": "Write a file to the operation workspace (exploit scripts, wordlists, configs).",
+            "description": "Write a file to the operation workspace.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "Relative path within the workspace."},
-                    "content": {"type": "string", "description": "File content to write."},
+                    "path": {"type": "string", "description": "Relative path in workspace."},
+                    "content": {"type": "string", "description": "File content."},
                 },
                 "required": ["path", "content"],
             },
@@ -94,7 +84,7 @@ NATIVE_TOOLS: list[dict] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "Relative path within the workspace."},
+                    "path": {"type": "string", "description": "Relative path in workspace."},
                 },
                 "required": ["path"],
             },
@@ -104,18 +94,18 @@ NATIVE_TOOLS: list[dict] = [
         "type": "function",
         "function": {
             "name": "create_finding",
-            "description": "Create a verified vulnerability finding with evidence and proof of concept. Only use when you have confirmed a vulnerability.",
+            "description": "Record a confirmed vulnerability with CVSS and proof of concept.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "title": {"type": "string", "description": "Short title of the vulnerability."},
-                    "type": {"type": "string", "description": "Vulnerability type (sqli, xss, rce, ssrf, idor, lfi, xxe, csrf, misconfiguration)."},
+                    "title": {"type": "string", "description": "Short vulnerability title."},
+                    "type": {"type": "string", "description": "Type: sqli, xss, rce, ssrf, idor, lfi, xxe, csrf, misconfiguration."},
                     "severity": {"type": "string", "enum": ["critical", "high", "medium", "low", "info"]},
-                    "cvss_score": {"type": "number", "description": "CVSS v3.1 base score (0.0 - 10.0)."},
-                    "affected": {"type": "object", "description": "Affected asset: {url, parameter, method, component}."},
-                    "evidence": {"type": "object", "description": "Evidence: {request, response, screenshot}."},
-                    "poc": {"type": "object", "description": "Proof of concept: {command, script, steps}."},
-                    "remediation": {"type": "string", "description": "Recommended remediation steps."},
+                    "cvss_score": {"type": "number", "description": "CVSS base score (0.0-10.0)."},
+                    "affected": {"type": "object", "description": "Target: {url, parameter, method}."},
+                    "evidence": {"type": "object", "description": "Evidence: {request, response}."},
+                    "poc": {"type": "object", "description": "Proof of concept: {command, script}."},
+                    "remediation": {"type": "string", "description": "Remediation guidance."},
                 },
                 "required": ["title", "type", "severity", "cvss_score", "affected", "evidence", "poc", "remediation"],
             },
@@ -125,12 +115,12 @@ NATIVE_TOOLS: list[dict] = [
         "type": "function",
         "function": {
             "name": "search_cve",
-            "description": "Search the local CVE knowledge base for known vulnerabilities by keyword, product, or CVE ID.",
+            "description": "Search local CVE database by keyword, product, or CVE ID.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "Search query (CVE ID, product name, keyword)."},
-                    "limit": {"type": "integer", "description": "Maximum results to return.", "default": 10},
+                    "query": {"type": "string", "description": "Keyword or product name."},
+                    "limit": {"type": "integer", "description": "Max results (default 10)."},
                 },
                 "required": ["query"],
             },
@@ -140,13 +130,13 @@ NATIVE_TOOLS: list[dict] = [
         "type": "function",
         "function": {
             "name": "stash_artifact",
-            "description": "Store, list, or retrieve cross-operation artifacts (credentials, hosts, payloads, tokens).",
+            "description": "Store or retrieve cross-operation artifacts (credentials, tokens, hosts).",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "action": {"type": "string", "enum": ["add", "list", "pull"]},
-                    "type": {"type": "string", "description": "Artifact type (credential, hash, host, range, payload, script, token)."},
-                    "value": {"type": "string", "description": "Artifact value (for add)."},
+                    "type": {"type": "string", "description": "Artifact type (credential, host, token, payload)."},
+                    "value": {"type": "string", "description": "Artifact value."},
                     "note": {"type": "string", "description": "Optional note."},
                     "id": {"type": "string", "description": "Artifact ID (for pull)."},
                 },
@@ -154,7 +144,80 @@ NATIVE_TOOLS: list[dict] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_memory",
+            "description": "Read operation memory (target_map, attack_surface, or log).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "section": {"type": "string", "enum": ["target_map", "attack_surface", "log"]},
+                },
+                "required": ["section"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_memory",
+            "description": "Record newly discovered hosts, ports, or milestones to operation memory.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "section": {"type": "string", "enum": ["target_map", "attack_surface", "log"]},
+                    "content": {"type": "string", "description": "Markdown entry or table row."},
+                    "mode": {"type": "string", "enum": ["append", "replace"]},
+                },
+                "required": ["section", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "query_playbook",
+            "description": "Search playbook KB for tested techniques and bypasses (e.g. 'nginx 403', 'wordpress', 'sqli').",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Technology or attack keyword."},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "save_playbook",
+            "description": "Save an effective attack technique or command to the continuous learning KB.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "technology": {"type": "string", "description": "Target technology (e.g. nginx, wordpress)."},
+                    "technique": {"type": "string", "description": "Identifier (e.g. 403_bypass, sqli_tamper)."},
+                    "commands": {"type": "string", "description": "Exact commands or payload."},
+                    "notes": {"type": "string", "description": "Context and why it worked."},
+                },
+                "required": ["technology", "technique", "commands"],
+            },
+        },
+    },
 ]
+
+RECON_TOOLS = {"execute", "read_memory", "update_memory", "query_playbook", "save_playbook", "read_file", "web_search"}
+ANALYSIS_TOOLS = {"execute", "search_cve", "create_finding", "read_memory", "update_memory", "query_playbook", "read_file", "web_search"}
+
+
+def get_tools_for_phase(phase: str = "recon") -> list[dict]:
+    """Return an optimized, phase-scoped subset of tools to minimize prompt prefill tokens."""
+    if phase == "recon":
+        return [t for t in NATIVE_TOOLS if t["function"]["name"] in RECON_TOOLS]
+    elif phase == "analysis":
+        return [t for t in NATIVE_TOOLS if t["function"]["name"] in ANALYSIS_TOOLS]
+    return NATIVE_TOOLS
 
 
 # ---------------------------------------------------------------------------
@@ -170,6 +233,84 @@ def _jaccard_similarity(a: str, b: str) -> float:
     intersection = set_a & set_b
     union = set_a | set_b
     return len(intersection) / len(union)
+
+
+def _auto_repair_command(cmd: str) -> str:
+    """Auto-repair common command-line syntax mistakes made by LLMs."""
+    if not cmd or not isinstance(cmd, str):
+        return cmd
+    cmd = cmd.strip()
+    parts = cmd.split()
+    if not parts:
+        return cmd
+
+    binary = parts[0].lower()
+
+    if binary == "subfinder":
+        has_input_flag = any(p in ("-d", "-dl", "-list", "-f") for p in [p.lower() for p in parts[1:]])
+        if not has_input_flag:
+            target_arg = None
+            other_args = []
+            for p in parts[1:]:
+                if not p.startswith("-") and target_arg is None:
+                    target_arg = p
+                else:
+                    other_args.append(p)
+            if target_arg:
+                cmd = f"subfinder -d {target_arg} {' '.join(other_args)}".strip()
+
+    elif binary == "httpx":
+        has_input_flag = any(p in ("-u", "-target", "-l", "-list") for p in [p.lower() for p in parts[1:]])
+        if not has_input_flag:
+            target_arg = None
+            other_args = []
+            for p in parts[1:]:
+                if not p.startswith("-") and target_arg is None:
+                    target_arg = p
+                else:
+                    other_args.append(p)
+            if target_arg:
+                cmd = f"httpx -u {target_arg} {' '.join(other_args)}".strip()
+
+    elif binary == "nuclei":
+        has_input_flag = any(p in ("-u", "-target", "-l", "-list") for p in [p.lower() for p in parts[1:]])
+        if not has_input_flag:
+            target_arg = None
+            other_args = []
+            for p in parts[1:]:
+                if not p.startswith("-") and target_arg is None:
+                    target_arg = p
+                else:
+                    other_args.append(p)
+            if target_arg:
+                cmd = f"nuclei -u {target_arg} {' '.join(other_args)}".strip()
+
+    elif binary == "katana":
+        has_input_flag = any(p in ("-u", "-list") for p in [p.lower() for p in parts[1:]])
+        if not has_input_flag:
+            target_arg = None
+            other_args = []
+            for p in parts[1:]:
+                if not p.startswith("-") and target_arg is None:
+                    target_arg = p
+                else:
+                    other_args.append(p)
+            if target_arg:
+                cmd = f"katana -u {target_arg} {' '.join(other_args)}".strip()
+
+    elif binary == "nmap":
+        # The sandbox runs as non-root with no raw-socket capability, so a SYN
+        # scan (-sS) fails with "Operation not permitted". Downgrade to a TCP
+        # connect scan (-sT), which needs no privilege and still yields open
+        # ports + service/version detection (-sV). Validated in-container.
+        rest = [("-sT" if p.lower() == "-ss" else p) for p in parts[1:]]
+        # Ensure -Pn so firewalls dropping ICMP ping don't cause false
+        # 'Host seems down' aborts (common on cloud/VPS targets).
+        has_pn = any(p.lower() in ("-pn", "-p0") for p in rest)
+        prefix = "nmap" if has_pn else "nmap -Pn"
+        cmd = f"{prefix} {' '.join(rest)}".strip()
+
+    return cmd
 
 
 # ---------------------------------------------------------------------------
@@ -201,6 +342,13 @@ class ToolExecutor:
         self.alert_engine = alert_engine
         self.session_id = session_id
         self._findings: list[dict] = []
+        self.playbook_mgr = None
+        if self.db:
+            try:
+                from ..core.playbooks import PlaybookManager
+                self.playbook_mgr = PlaybookManager(self.db)
+            except Exception:
+                pass
 
         self._handlers: dict[str, Any] = {
             "execute": self._handle_execute,
@@ -211,9 +359,15 @@ class ToolExecutor:
             "create_finding": self._handle_create_finding,
             "search_cve": self._handle_search_cve,
             "stash_artifact": self._handle_stash_artifact,
+            "read_memory": self._handle_read_memory,
+            "update_memory": self._handle_update_memory,
+            "query_playbook": self._handle_query_playbook,
+            "save_playbook": self._handle_save_playbook,
         }
 
     async def execute_tool(self, tool_name: str, arguments: dict) -> dict:
+        if tool_name in ("run_command", "bash", "sh", "terminal"):
+            tool_name = "execute"
         handler = self._handlers.get(tool_name)
         if handler is None:
             return {"success": False, "output": None, "error": f"Unknown tool: {tool_name}"}
@@ -230,24 +384,22 @@ class ToolExecutor:
     # -- execute: run command in Docker sandbox --------------------------------
 
     async def _handle_execute(self, command: str, timeout: int = 300) -> dict:
+        command = _auto_repair_command(command)
         timeout = min(timeout, 900)  # Cap at 15 minutes
         if self.sandbox is None:
-            # Fallback: run locally (dev mode only)
-            import asyncio
-            proc = await asyncio.create_subprocess_shell(
-                command,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            try:
-                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-            except asyncio.TimeoutError:
-                proc.kill()
-                return {"stdout": "", "stderr": f"Timed out after {timeout}s", "exit_code": -1, "duration": timeout}
+            # SECURITY: never fall back to running attacker/LLM-influenced
+            # commands directly on the host. Refuse instead. The previous
+            # create_subprocess_shell fallback was a host RCE path whenever the
+            # sandbox image was unavailable (e.g. no Docker socket in the
+            # compose deployment). Build the image with `arcanum sandbox build`.
             return {
-                "stdout": stdout.decode(errors="replace")[:50000],
-                "stderr": stderr.decode(errors="replace")[:10000],
-                "exit_code": proc.returncode or 0,
+                "stdout": "",
+                "stderr": (
+                    "Sandbox indisponível — execução recusada por segurança. "
+                    "Construa a imagem com 'arcanum sandbox build' e verifique o acesso ao Docker."
+                ),
+                "exit_code": -1,
+                "duration": 0.0,
             }
 
         # Use sandbox container
@@ -257,6 +409,7 @@ class ToolExecutor:
             container_id = await self.sandbox.create_container(self.workspace_dir)
 
         result = await self.sandbox.execute(container_id, command, timeout=timeout)
+        self._auto_update_target_map(result.stdout)
         return {
             "stdout": result.stdout[:50000],
             "stderr": result.stderr[:10000],
@@ -486,3 +639,105 @@ class ToolExecutor:
                     return art
             return {"error": f"Artifact not found: {id}"}
         return {"error": f"Unknown stash action: {action}"}
+
+    # -- Memory / Wiki Handlers -----------------------------------------------
+
+    def _get_wiki_path(self, section: str) -> Path:
+        wiki_dir = self.workspace_dir / "wiki"
+        wiki_dir.mkdir(parents=True, exist_ok=True)
+        filename_map = {
+            "target_map": "TARGET_MAP.md",
+            "targets": "TARGET_MAP.md",
+            "attack_surface": "ATTACK_SURFACE.md",
+            "log": "OPERATION_LOG.md",
+            "operation_log": "OPERATION_LOG.md",
+        }
+        filename = filename_map.get(section.lower().strip(), "OPERATION_LOG.md")
+        return wiki_dir / filename
+
+    def _auto_update_target_map(self, text: str) -> None:
+        """Automatically parse port scans and host discovery into TARGET_MAP.md."""
+        if not text or ("open" not in text and "Nmap scan report" not in text):
+            return
+        try:
+            import re
+            lines = text.splitlines()
+            open_ports = []
+            current_host = "auto-detected"
+            for line in lines:
+                if "Nmap scan report for" in line:
+                    parts = line.split("for")
+                    if len(parts) > 1:
+                        current_host = parts[1].strip()
+                match = re.search(r'(\d+/(?:tcp|udp))\s+open\s+(\S+)(?:\s+(.*))?', line)
+                if match:
+                    port, service, version = match.group(1), match.group(2), match.group(3) or "-"
+                    open_ports.append((current_host, port, service, version.strip()))
+
+            if open_ports:
+                target_file = self._get_wiki_path("target_map")
+                if not target_file.exists():
+                    header = (
+                        "# Target Map (Living Memory)\n\n"
+                        "| Host / IP | Port | Service | Product / Version | Notes |\n"
+                        "| :--- | :--- | :--- | :--- | :--- |\n"
+                    )
+                    target_file.write_text(header, encoding="utf-8")
+
+                current = target_file.read_text(encoding="utf-8")
+                new_rows = []
+                for host, port, service, version in open_ports:
+                    row = f"| {host} | {port} | {service} | {version} | Auto-discovered by scan |"
+                    if port not in current:
+                        new_rows.append(row)
+                if new_rows:
+                    target_file.write_text(current.rstrip() + "\n" + "\n".join(new_rows) + "\n", encoding="utf-8")
+        except Exception:
+            pass
+
+    async def _handle_read_memory(self, section: str) -> dict:
+        target_file = self._get_wiki_path(section)
+        if not target_file.exists():
+            return {"section": section, "content": "Memory file is currently empty.", "exists": False}
+        try:
+            content = target_file.read_text(encoding="utf-8")
+            return {"section": section, "content": content[:10000], "exists": True}
+        except Exception as e:
+            return {"section": section, "error": str(e)}
+
+    async def _handle_update_memory(self, section: str, content: str, mode: str = "append") -> dict:
+        target_file = self._get_wiki_path(section)
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        try:
+            if mode == "replace" or not target_file.exists():
+                target_file.write_text(content.strip() + "\n", encoding="utf-8")
+            else:
+                existing = target_file.read_text(encoding="utf-8")
+                if not content.startswith("\n"):
+                    content = "\n" + content
+                target_file.write_text(existing.rstrip() + f"\n{content.strip()}\n", encoding="utf-8")
+            return {"section": section, "status": "updated", "mode": mode, "timestamp": now}
+        except Exception as e:
+            return {"section": section, "error": str(e)}
+
+    # -- Playbook Handlers ----------------------------------------------------
+
+    async def _handle_query_playbook(self, query: str) -> dict:
+        if self.playbook_mgr:
+            try:
+                results = await self.playbook_mgr.search(query, limit=5)
+                return {"query": query, "playbooks": results, "count": len(results)}
+            except Exception as e:
+                return {"query": query, "error": str(e), "playbooks": []}
+        return {"query": query, "error": "Playbook manager not initialized", "playbooks": []}
+
+    async def _handle_save_playbook(
+        self, technology: str, technique: str, commands: str, notes: str = "",
+    ) -> dict:
+        if self.playbook_mgr:
+            try:
+                res = await self.playbook_mgr.save(technology, technique, commands, notes)
+                return {"status": "saved", "playbook": res}
+            except Exception as e:
+                return {"status": "error", "error": str(e)}
+        return {"status": "error", "error": "Playbook manager not initialized"}

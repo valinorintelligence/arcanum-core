@@ -23,7 +23,7 @@ class ExecutionResult:
 class SandboxManager:
     """Manages Docker containers for sandboxed security tool execution."""
 
-    DEFAULT_IMAGE = "arcanum/kali-sandbox:latest"
+    DEFAULT_IMAGE = "arcanum-sandbox:latest"
     DEFAULT_TIMEOUT = 300
     MEMORY_LIMIT = "4g"
 
@@ -68,11 +68,21 @@ class SandboxManager:
         container_name = f"arcanum-sandbox-{uuid.uuid4().hex[:12]}"
         workspace_abs = str(workspace_dir.resolve())
 
+        # Defense-in-depth: non-root, all caps dropped, no privilege escalation,
+        # and resource limits. Validated that `nmap -sT -sV` (connect scan +
+        # service detection) works fine under this profile — raw-socket SYN
+        # scans are intentionally not supported here (would need root/ambient
+        # caps). See _auto_repair_command which downgrades -sS -> -sT.
         cmd = [
             "docker", "run", "-d",
             "--name", container_name,
-            "--memory", self.MEMORY_LIMIT,
+            "--user", "nobody",
+            "--cap-drop=ALL",
             "--security-opt", "no-new-privileges",
+            "--memory", self.MEMORY_LIMIT,
+            "--memory-swap", self.MEMORY_LIMIT,  # disallow swap growth
+            "--pids-limit", "512",
+            "--cpus", "2",
             "-v", f"{workspace_abs}:/workspace",
         ]
 
