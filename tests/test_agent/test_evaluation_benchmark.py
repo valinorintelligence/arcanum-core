@@ -55,15 +55,19 @@ def test_eval_auto_repair_katana():
 
 
 def test_eval_auto_repair_nmap_pn():
-    # Nmap without -Pn should have -Pn added to prevent firewall ping drop false negatives
+    # Nmap without -Pn gets -Pn (firewall ping-drop false negatives) AND, when
+    # no scan type is given, -sT (the unprivileged sandbox can't open raw
+    # sockets, so nmap's default SYN scan fails with "Operation not permitted").
     cmd = "nmap -sV -p 80,443 example.com"
     repaired = _auto_repair_command(cmd)
     assert "-Pn" in repaired
+    assert "-sT" in repaired  # forced connect scan (no raw sockets as nobody)
     assert "80,443" in repaired
 
-    # Already has -Pn
-    cmd_pn = "nmap -Pn -sV -p 80 example.com"
-    assert _auto_repair_command(cmd_pn) == "nmap -Pn -sV -p 80 example.com"
+    # Already has -Pn: still forces -sT since no scan type was specified
+    repaired_pn = _auto_repair_command("nmap -Pn -sV -p 80 example.com")
+    assert "-sT" in repaired_pn and "-Pn" in repaired_pn
+    assert repaired_pn.count("-Pn") == 1  # not duplicated
 
 
 # ===========================================================================

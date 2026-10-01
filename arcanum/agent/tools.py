@@ -299,14 +299,24 @@ def _auto_repair_command(cmd: str) -> str:
                 cmd = f"katana -u {target_arg} {' '.join(other_args)}".strip()
 
     elif binary == "nmap":
-        # The sandbox runs as non-root with no raw-socket capability, so a SYN
-        # scan (-sS) fails with "Operation not permitted". Downgrade to a TCP
-        # connect scan (-sT), which needs no privilege and still yields open
-        # ports + service/version detection (-sV). Validated in-container.
+        # The sandbox runs as non-root with no raw-socket capability. Any scan
+        # that needs raw packets fails with "Couldn't open a raw socket.
+        # Operation not permitted". Two cases must be handled:
+        #   1. explicit SYN scan (-sS)  -> rewrite to TCP connect (-sT)
+        #   2. NO scan type given       -> nmap defaults to SYN (raw) even as
+        #      an unprivileged user in this image, so force -sT explicitly.
+        # -sT needs no privilege and still gives open ports + -sV service/version.
         rest = [("-sT" if p.lower() == "-ss" else p) for p in parts[1:]]
+        lowers = [p.lower() for p in rest]
+        # Scan-type flags that select the port-scan technique.
+        scan_types = {"-st", "-su", "-sa", "-sw", "-sm", "-sf",
+                      "-sx", "-sy", "-sz", "-so", "-sn"}
+        if not any(p in scan_types for p in lowers):
+            rest = ["-sT"] + rest  # force unprivileged TCP connect scan
+            lowers = [p.lower() for p in rest]
         # Ensure -Pn so firewalls dropping ICMP ping don't cause false
         # 'Host seems down' aborts (common on cloud/VPS targets).
-        has_pn = any(p.lower() in ("-pn", "-p0") for p in rest)
+        has_pn = any(p in ("-pn", "-p0") for p in lowers)
         prefix = "nmap" if has_pn else "nmap -Pn"
         cmd = f"{prefix} {' '.join(rest)}".strip()
 

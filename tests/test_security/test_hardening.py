@@ -92,6 +92,15 @@ def test_nmap_syn_downgraded_and_pn_added():
     assert "-sS" not in repaired and "-sT" in repaired and "-Pn" in repaired
 
 
+def test_nmap_without_scan_type_forces_connect():
+    # Reproduces the operator's failure: no scan type -> nmap defaults to SYN
+    # (raw socket) which fails as nobody. Must inject -sT.
+    repaired = _auto_repair_command("nmap -Pn -sV -p 80,443,8080,8443 example.com")
+    assert "-sT" in repaired and "-Pn" in repaired
+    # an explicit connect scan is left intact (no double -sT)
+    assert _auto_repair_command("nmap -sT -p 80 example.com").count("-sT") == 1
+
+
 # --- Multi-call extractor -------------------------------------------------
 
 def test_extractor_returns_all_inline_calls():
