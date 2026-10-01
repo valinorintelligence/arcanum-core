@@ -158,92 +158,114 @@ def cve_update_cmd(year: int):
 
     async def _run():
         import json
-        from datetime import datetime
+        import os
+        import time
+        import httpx
+        from datetime import datetime, timedelta
 
         config = get_config()
         kb = CVEKnowledgeBase(config.cve_db)
         await kb.connect()
 
+        # NVD API 2.0 limits each query to a 120-day publish window, so we must
+        # page the year in <=120-day slices (asking for a full year returns 404).
+        api_key = os.environ.get("NVD_API_KEY", "").strip()
+        headers = {"apiKey": api_key} if api_key else {}
+        # Rate limits: 50 req / 30s with a key, 5 req / 30s without.
+        delay = 0.8 if api_key else 6.5
+        fmt = "%Y-%m-%dT%H:%M:%S.000"
+
+        def _windows(y: int):
+            start = datetime(y, 1, 1, 0, 0, 0)
+            end = datetime(y, 12, 31, 23, 59, 59)
+            now = datetime.now()
+            if end > now:
+                end = now
+            cur = start
+            while cur < end:
+                w_end = min(cur + timedelta(days=119), end)
+                yield cur, w_end
+                cur = w_end + timedelta(seconds=1)
+
         try:
             years = [year] if year else [datetime.now().year, datetime.now().year - 1]
             total = 0
+            if not api_key:
+                click.echo("  (Sem NVD_API_KEY — limite de 5 req/30s; defina NVD_API_KEY para acelerar.)")
 
             for y in years:
                 click.echo(f"  Fetching CVEs for {y}...")
-                start_idx = 0
                 year_count = 0
 
-                while True:
-                    url = (
-                        f"https://services.nvd.nist.gov/rest/json/cves/2.0"
-                        f"?pubStartDate={y}-01-01T00:00:00.000"
-                        f"&pubEndDate={y}-12-31T23:59:59.999"
-                        f"&startIndex={start_idx}&resultsPerPage=200"
-                    )
-                    try:
-                        import httpx
-                        async with httpx.AsyncClient(timeout=60) as client:
-                            resp = await client.get(url)
-                            if resp.status_code == 403:
-                                click.echo(f"  Rate limited. Waiting 10s...")
-                                import time
-                                time.sleep(10)
+                for w_start, w_end in _windows(y):
+                    start_idx = 0
+                    while True:
+                        url = (
+                            "https://services.nvd.nist.gov/rest/json/cves/2.0"
+                            f"?pubStartDate={w_start.strftime(fmt)}"
+                            f"&pubEndDate={w_end.strftime(fmt)}"
+                            f"&startIndex={start_idx}&resultsPerPage=2000"
+                        )
+                        try:
+                            async with httpx.AsyncClient(timeout=90) as client:
+                                resp = await client.get(url, headers=headers)
+                                if resp.status_code in (403, 429, 503):
+                                    click.echo("  Rate limited. Waiting 15s...")
+                                    time.sleep(15)
+                                    continue
+                                resp.raise_for_status()
+                                data = resp.json()
+                        except Exception as e:
+                            click.echo(f"  Error fetching {w_start:%Y-%m-%d}..{w_end:%Y-%m-%d}: {e}")
+                            break
+
+                        vulns = data.get("vulnerabilities", [])
+                        entries = []
+                        for item in vulns:
+                            cve_data = item.get("cve", {})
+                            cve_id = cve_data.get("id", "")
+                            if not cve_id:
                                 continue
-                            resp.raise_for_status()
-                            data = resp.json()
-                    except Exception as e:
-                        click.echo(f"  Error fetching: {e}")
-                        break
 
-                    vulns = data.get("vulnerabilities", [])
-                    if not vulns:
-                        break
+                            desc = ""
+                            for d in cve_data.get("descriptions", []):
+                                if d.get("lang") == "en":
+                                    desc = d.get("value", "")
+                                    break
 
-                    entries = []
-                    for item in vulns:
-                        cve_data = item.get("cve", {})
-                        cve_id = cve_data.get("id", "")
-                        if not cve_id:
-                            continue
+                            cvss_score = None
+                            cvss_vector = None
+                            metrics = cve_data.get("metrics", {})
+                            for key in ("cvssMetricV31", "cvssMetricV30", "cvssMetricV2"):
+                                if key in metrics and metrics[key]:
+                                    cd = metrics[key][0].get("cvssData", {})
+                                    cvss_score = cd.get("baseScore")
+                                    cvss_vector = cd.get("vectorString")
+                                    break
 
-                        desc = ""
-                        for d in cve_data.get("descriptions", []):
-                            if d.get("lang") == "en":
-                                desc = d.get("value", "")
-                                break
+                            cwe_ids = []
+                            for wp in cve_data.get("weaknesses", []):
+                                for d in wp.get("description", []):
+                                    v = d.get("value", "")
+                                    if v.startswith("CWE-"):
+                                        cwe_ids.append(v)
 
-                        cvss_score = None
-                        cvss_vector = None
-                        metrics = cve_data.get("metrics", {})
-                        for key in ("cvssMetricV31", "cvssMetricV30", "cvssMetricV2"):
-                            if key in metrics and metrics[key]:
-                                cd = metrics[key][0].get("cvssData", {})
-                                cvss_score = cd.get("baseScore")
-                                cvss_vector = cd.get("vectorString")
-                                break
+                            published = cve_data.get("published", "")[:10] or None
+                            entries.append(CVEEntry(
+                                id=cve_id, description=desc, cvss_score=cvss_score,
+                                cvss_vector=cvss_vector, cwe_ids=cwe_ids or None,
+                                exploit_available=False, published_at=published,
+                            ))
 
-                        cwe_ids = []
-                        for wp in cve_data.get("weaknesses", []):
-                            for d in wp.get("description", []):
-                                v = d.get("value", "")
-                                if v.startswith("CWE-"):
-                                    cwe_ids.append(v)
+                        if entries:
+                            await kb.bulk_import(entries)
+                            year_count += len(entries)
 
-                        published = cve_data.get("published", "")[:10] or None
-                        entries.append(CVEEntry(
-                            id=cve_id, description=desc, cvss_score=cvss_score,
-                            cvss_vector=cvss_vector, cwe_ids=cwe_ids or None,
-                            exploit_available=False, published_at=published,
-                        ))
-
-                    if entries:
-                        await kb.bulk_import(entries)
-                        year_count += len(entries)
-
-                    total_results = data.get("totalResults", 0)
-                    start_idx += len(vulns)
-                    if start_idx >= total_results:
-                        break
+                        total_results = data.get("totalResults", 0)
+                        start_idx += len(vulns)
+                        time.sleep(delay)  # respect NVD rate limit
+                        if not vulns or start_idx >= total_results:
+                            break
 
                 click.echo(f"  {y}: {year_count} CVEs imported")
                 total += year_count
