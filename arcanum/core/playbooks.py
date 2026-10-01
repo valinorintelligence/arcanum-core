@@ -33,9 +33,21 @@ DEFAULT_PLAYBOOKS = [
     },
     {
         "technology": "nmap",
-        "technique": "stealth_fast_service_discovery",
-        "commands": "nmap -sS -T4 --top-ports 1000 --open -sV -sC -Pn -oA /workspace/output/nmap_fast TARGET",
-        "notes": "Optimized balance of speed and detection accuracy for initial host reconnaissance.",
+        "technique": "fast_service_discovery",
+        "commands": "nmap -sT -Pn -T4 --top-ports 1000 --open -sV -oA /workspace/output/nmap_fast TARGET",
+        "notes": "Connect scan (-sT) for the non-root sandbox: -sS/SYN needs raw sockets and fails. -Pn skips ICMP (cloud targets drop ping).",
+    },
+    {
+        "technology": "httpx",
+        "technique": "http_probe_tech_detect",
+        "commands": "httpx-toolkit -u TARGET -tech-detect -status-code -title",
+        "notes": "Use 'httpx-toolkit' (ProjectDiscovery). On the sandbox '/usr/bin/httpx' is the Python HTTP client and has no -u flag.",
+    },
+    {
+        "technology": "nuclei",
+        "technique": "safe_vuln_scan",
+        "commands": "nuclei -u TARGET -severity critical,high -rl 50",
+        "notes": "Rate-limit (-rl) so fragile cloud/proxy targets don't go unresponsive mid-scan under thousands of connections.",
     },
 ]
 

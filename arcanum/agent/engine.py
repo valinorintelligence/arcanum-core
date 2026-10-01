@@ -48,8 +48,10 @@ class AgentEngine:
         self.findings_count = 0
         self.enable_thinking = getattr(llm, "enable_thinking", False)
         self.pending_action: dict | None = None
-        # Stagnation guard: how many times each exact `execute` command has run.
-        self._exec_signatures: dict[str, int] = {}
+        # Stagnation guard / feedback memory: per-command outcome history so we
+        # can tell "already succeeded, move on" apart from "failing in a loop".
+        self._cmd_history: dict[str, dict] = {}   # sig -> {runs, ok, fail, summary}
+        self._repeat_after_success = 0
         self._stagnation_aborted = False
 
     # -- Public API ---------------------------------------------------------
@@ -181,32 +183,46 @@ class AgentEngine:
                     if tool_name == "execute" and isinstance(arguments, dict) and "command" in arguments:
                         arguments["command"] = _auto_repair_command(arguments["command"])
 
-                        # Stagnation guard: a weak local model can propose the
-                        # same command over and over (observed in the field).
-                        # After 2 identical runs, inject a corrective hint; on
-                        # the 3rd, abort the run so it can't spin to MAX_ITERATIONS.
+                        # Stagnation / feedback guard. A weak local model can
+                        # re-propose a command it already ran. Distinguish:
+                        #  - already SUCCEEDED -> it just didn't register the
+                        #    result; feed a concise reminder and skip the re-run
+                        #    (don't kill the operation as "no progress").
+                        #  - FAILED >=2x identically -> real failure loop, abort.
                         sig = arguments["command"].strip()
-                        seen = self._exec_signatures.get(sig, 0)
-                        if seen >= 2:
+                        h = self._cmd_history.get(sig)
+                        if h and h.get("ok", 0) > 0:
+                            self._repeat_after_success += 1
+                            self.messages.append({
+                                "role": "tool", "name": "execute",
+                                "content": (
+                                    f"[JÁ EXECUTADO] '{sig}' já rodou com sucesso. Resultado: "
+                                    f"{h.get('summary', 'concluído')}. NÃO repita; avance para uma "
+                                    "ação DIFERENTE (outra ferramenta/porta/endpoint) ou finalize com resumo."
+                                ),
+                            })
+                            yield {"type": "info",
+                                   "content": f"Comando já concluído com sucesso; pulando repetição: {sig}"}
+                            if self._repeat_after_success >= 3:
+                                yield {"type": "error",
+                                       "error": "Agente preso repetindo ações já concluídas. Finalize ou redirecione a operação.",
+                                       "iteration": self.iteration}
+                                self._stagnation_aborted = True
+                                return
+                            continue  # skip; re-query the model next iteration
+                        if h and h.get("fail", 0) >= 2:
                             self.messages.append({
                                 "role": "user",
                                 "content": (
-                                    "[SISTEMA] Você repetiu o mesmo comando várias vezes sem progresso: "
-                                    f"'{sig}'. Pare de repetir. Analise a última saída e escolha uma AÇÃO "
-                                    "DIFERENTE (outra ferramenta, outro alvo/porta) ou finalize com um resumo."
+                                    f"[SISTEMA] O comando '{sig}' falhou repetidamente. Pare de repetir. "
+                                    "Analise o erro e escolha uma AÇÃO DIFERENTE ou finalize com um resumo."
                                 ),
                             })
-                            yield {
-                                "type": "error",
-                                "error": (
-                                    f"Execução interrompida: comando repetido {seen} vezes sem progresso "
-                                    f"('{sig}'). Redirecione a operação ou tente outra abordagem."
-                                ),
-                                "iteration": self.iteration,
-                            }
+                            yield {"type": "error",
+                                   "error": f"Execução interrompida: '{sig}' falhou {h['fail']}x sem progresso. Redirecione a operação.",
+                                   "iteration": self.iteration}
                             self._stagnation_aborted = True
                             return
-                        self._exec_signatures[sig] = seen + 1
 
                     explanation = self._explain_tool_action(tool_name, arguments)
 
@@ -255,6 +271,8 @@ class AgentEngine:
 
                     # Execute the tool
                     result = await self.tool_executor.execute_tool(tool_name, arguments)
+                    if tool_name == "execute":
+                        self._record_cmd_result(arguments.get("command", ""), result)
 
                     tool_msg = self._format_tool_result(tool_name, result)
                     self.messages.append(tool_msg)
@@ -299,6 +317,8 @@ class AgentEngine:
         except Exception as exc:
             yield {"type": "error", "error": f"Falha na execução da ferramenta {tool_name}: {exc}", "iteration": self.iteration}
             return
+        if tool_name == "execute":
+            self._record_cmd_result(arguments.get("command", ""), result)
 
         tool_msg = self._format_tool_result(tool_name, result)
         self.messages.append(tool_msg)
@@ -334,6 +354,33 @@ class AgentEngine:
             "content": f"[RECUSA DO OPERADOR] O operador cancelou a execução sugerida da ferramenta: {cancelled_tool}."
         })
         return cancelled_tool
+
+    def _record_cmd_result(self, command: str, result: dict) -> None:
+        """Record the outcome of an executed shell command for the stagnation /
+        feedback guard: success is exit_code == 0; keep a short result summary."""
+        sig = (command or "").strip()
+        if not sig:
+            return
+        out = result.get("output") if isinstance(result, dict) else None
+        exit_code = None
+        stdout = stderr = ""
+        if isinstance(out, dict):
+            exit_code = out.get("exit_code")
+            stdout = out.get("stdout") or ""
+            stderr = out.get("stderr") or ""
+        ok = (exit_code == 0) and bool(result.get("success", True))
+        # Concise summary: prefer a meaningful stdout line, else the error.
+        summary = ""
+        clean = self._clean_scan_text(stdout) if stdout else ""
+        if clean:
+            lines = [l for l in clean.splitlines() if l.strip() and not l.startswith("...[")]
+            summary = (lines[-1] if lines else "")[:200]
+        if not summary:
+            summary = (self._clean_scan_text(stderr)[:200] if stderr else "") or (f"exit_code={exit_code}")
+        h = self._cmd_history.setdefault(sig, {"runs": 0, "ok": 0, "fail": 0, "summary": ""})
+        h["runs"] += 1
+        h["ok" if ok else "fail"] += 1
+        h["summary"] = summary
 
     # -- Extended Thinking ---------------------------------------------------
 
@@ -837,9 +884,9 @@ class AgentEngine:
             f"Execute the full reconnaissance pipeline:\n"
             f"1. Subdomain enumeration: subfinder -d {target} -all -o /workspace/output/subdomains.txt\n"
             f"2. DNS resolution: dnsx -l /workspace/output/subdomains.txt -a -resp -o /workspace/output/dns.txt\n"
-            f"3. Live host detection: httpx -l /workspace/output/subdomains.txt -tech-detect -status-code -o /workspace/output/live.txt\n"
-            f"4. Port scanning: nmap -sV -sC -iL /workspace/output/live.txt -oA /workspace/output/nmap\n"
-            f"5. Vulnerability scanning: nuclei -l /workspace/output/live.txt -severity critical,high -o /workspace/output/vulns.txt\n"
+            f"3. Live host detection: httpx-toolkit -l /workspace/output/subdomains.txt -tech-detect -status-code -o /workspace/output/live.txt\n"
+            f"4. Port scanning: nmap -sT -Pn -sV -iL /workspace/output/live.txt -oA /workspace/output/nmap\n"
+            f"5. Vulnerability scanning: nuclei -l /workspace/output/live.txt -severity critical,high -rl 50 -o /workspace/output/vulns.txt\n"
             f"6. For any discovered web apps, test for SQLi, XSS, and other common vulns\n"
             f"7. Create findings for all confirmed vulnerabilities\n\n"
             f"Analyze all output at each step. Chain results between steps."
@@ -939,15 +986,16 @@ Você realiza avaliações de segurança autorizadas utilizando ferramentas prof
 - **manual**: Executa ferramentas somente quando solicitado explicitamente pelo operador. Fornece orientação técnica especialista e explicações.
 
 ## Metodologia e Sintaxe Correta de Ferramentas
+IMPORTANTE: o sandbox roda SEM privilégio de root. Use SEMPRE a sintaxe abaixo.
 ### Fase 1: Reconhecimento (Recon)
 - Enumerar subdomínios: execute com 'subfinder -d {target}'
 - Resolver DNS: execute com 'dnsx -d {target} -resp'
-- Sondar HTTP e tecnologias: execute com 'httpx -u {target} -tech-detect -status-code'
-- Escaneamento de portas: execute com 'nmap -sV -p 80,443,8080,8443 {target}' (ou portas específicas)
+- Sondar HTTP e tecnologias: execute com 'httpx-toolkit -u {target} -tech-detect -status-code' (use 'httpx-toolkit', NUNCA 'httpx')
+- Escaneamento de portas: execute com 'nmap -sT -Pn -sV -p 80,443,8080,8443 {target}' (use -sT connect scan; -sS/SYN exige root e FALHA)
 - Rastreamento web: execute com 'katana -u http://{target}'
 
 ### Fase 2: Análise (Analysis)
-- Varredura de vulnerabilidades: execute com 'nuclei -u {target} -severity critical,high'
+- Varredura de vulnerabilidades: execute com 'nuclei -u {target} -severity critical,high -rl 50' (o -rl evita derrubar alvos frágeis)
 - Força-bruta de diretórios: execute com 'ffuf -u http://{target}/FUZZ -w /workspace/wordlists/common.txt'
 - Descoberta de parâmetros: execute com 'arjun -u http://{target}'
 - Pesquisa de CVEs conhecidos: search_cve com query da tecnologia detectada
@@ -962,10 +1010,51 @@ Você realiza avaliações de segurança autorizadas utilizando ferramentas prof
 - Resumir a avaliação de segurança e recomendações de mitigação.
 """
 
-    @staticmethod
-    def _format_tool_result(name: str, result: dict) -> dict:
-        content = json.dumps(result, default=str)
+    _ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
+    _NOISE_RE = re.compile(
+        r'found unresponsive permanently|Using Interactsh|Templates clustered|'
+        r'Templates loaded|New templates added|HTTP connections:|UI Dashboard|'
+        r'projectdiscovery\.io|Current .*version|Started .*crawling|Executing \d+',
+        re.I,
+    )
+
+    @classmethod
+    def _clean_scan_text(cls, text: str, max_lines: int = 60) -> str:
+        """Strip ANSI and collapse scanner log noise so the model sees the signal
+        (open ports, matches, endpoints, status codes) instead of a wall of
+        repeated '[INF] ... found unresponsive permanently' lines that made it
+        re-run finished scans."""
+        if not text:
+            return text
+        text = cls._ANSI_RE.sub('', text)
+        kept, noise = [], 0
+        for ln in text.splitlines():
+            s = ln.rstrip()
+            if not s.strip():
+                continue
+            if cls._NOISE_RE.search(s):
+                noise += 1
+                continue
+            kept.append(s)
+        if noise:
+            kept.append(f"...[{noise} linhas de log/ruído de scanner omitidas]...")
+        if len(kept) > max_lines:
+            half = max_lines // 2
+            kept = kept[:half] + [f"...[{len(kept) - max_lines} linhas intermediárias omitidas]..."] + kept[-half:]
+        return "\n".join(kept)
+
+    @classmethod
+    def _format_tool_result(cls, name: str, result: dict) -> dict:
+        r = dict(result) if isinstance(result, dict) else {"output": result}
+        out = r.get("output")
+        if isinstance(out, dict):
+            out = dict(out)
+            for k in ("stdout", "stderr"):
+                if isinstance(out.get(k), str) and out[k]:
+                    out[k] = cls._clean_scan_text(out[k])
+            r["output"] = out
+        content = json.dumps(r, default=str)
         # Cap tool output length to prevent context explosion on 8k local models
         if len(content) > 6000:
-            content = content[:6000] + f"\n...[truncated — output exceeds 6000 chars. Full log preserved in operation workspace]"
+            content = content[:6000] + "\n...[truncated — output exceeds 6000 chars. Full log preserved in operation workspace]"
         return {"role": "tool", "name": name, "content": content}

@@ -120,26 +120,31 @@ def test_extractor_returns_all_inline_calls():
     assert len(calls) == 3
 
 
-# --- Stagnation guard -----------------------------------------------------
+# --- Stagnation / feedback guard ------------------------------------------
 
-@pytest.mark.asyncio
-async def test_stagnation_guard_aborts_repeated_command(tmp_path):
-    class FakeLLM:
-        enable_thinking = False
-        async def chat(self, messages, tools=None, fmt=None):
-            return {"content": '{"name":"execute","arguments":{"command":"subfinder -d x.com"}}'}
+class _RepeatLLM:
+    enable_thinking = False
+    async def chat(self, messages, tools=None, fmt=None):
+        return {"content": '{"name":"execute","arguments":{"command":"subfinder -d x.com"}}'}
 
+
+def _make_exec(exit_code, tmp_path):
     class FakeExec:
         def __init__(self):
             self.calls = 0
         async def execute_tool(self, name, args):
             self.calls += 1
-            return {"success": True, "output": {"stdout": "", "exit_code": 1}}
+            return {"success": True, "output": {"stdout": "done" if exit_code == 0 else "", "exit_code": exit_code}}
         def _get_wiki_path(self, s):
             return tmp_path / "x.md"
+    return FakeExec()
 
-    te = FakeExec()
-    eng = AgentEngine(llm=FakeLLM(), tool_executor=te,
+
+@pytest.mark.asyncio
+async def test_stagnation_guard_aborts_failing_command(tmp_path):
+    # A command that keeps FAILING must abort the run (real failure loop).
+    te = _make_exec(exit_code=1, tmp_path=tmp_path)
+    eng = AgentEngine(llm=_RepeatLLM(), tool_executor=te,
                       session={"name": "op", "target": "x.com", "mode": "autopilot"})
     events = []
     async for ev in eng.run("x.com"):
@@ -147,7 +152,26 @@ async def test_stagnation_guard_aborts_repeated_command(tmp_path):
         if len(events) > 60:
             break
     assert te.calls <= 2
-    assert any(e.get("type") == "error" and "repetido" in str(e.get("error", "")) for e in events)
+    assert any(e.get("type") == "error" and "falhou" in str(e.get("error", "")).lower() for e in events)
+
+
+@pytest.mark.asyncio
+async def test_repeated_successful_command_is_skipped_not_failed(tmp_path):
+    # A command that already SUCCEEDED must not be treated as "no progress":
+    # the guard skips the re-run (info) and only stops the loop after several
+    # pointless repeats, never labelling it a failure.
+    te = _make_exec(exit_code=0, tmp_path=tmp_path)
+    eng = AgentEngine(llm=_RepeatLLM(), tool_executor=te,
+                      session={"name": "op", "target": "x.com", "mode": "autopilot"})
+    events = []
+    async for ev in eng.run("x.com"):
+        events.append(ev)
+        if len(events) > 80:
+            break
+    # It ran once successfully, then subsequent identical proposals are skipped.
+    assert te.calls == 1
+    assert any(e.get("type") == "info" and "já concluído" in str(e.get("content", "")) for e in events)
+    assert not any("falhou" in str(e.get("error", "")).lower() for e in events)
 
 
 # --- Token auth -----------------------------------------------------------

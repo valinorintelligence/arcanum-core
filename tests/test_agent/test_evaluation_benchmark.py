@@ -42,10 +42,13 @@ def test_eval_auto_repair_httpx():
 
 
 def test_eval_auto_repair_nuclei():
-    # Target without -u
-    cmd = "nuclei example.com -severity critical,high"
-    repaired = _auto_repair_command(cmd)
-    assert repaired == "nuclei -u example.com -severity critical,high"
+    # Target without -u gets -u, and a default rate limit (-rl) is added so
+    # fragile targets don't go unresponsive under load.
+    repaired = _auto_repair_command("nuclei example.com -severity critical,high")
+    assert repaired.startswith("nuclei -u example.com -severity critical,high")
+    assert "-rl 50" in repaired
+    # existing rate limit is respected (not duplicated)
+    assert _auto_repair_command("nuclei -u example.com -rl 100").count("-rl") == 1
 
 
 def test_eval_auto_repair_katana():

@@ -18,7 +18,13 @@ NATIVE_TOOLS: list[dict] = [
         "type": "function",
         "function": {
             "name": "execute",
-            "description": "Run a shell command inside Docker sandbox (e.g. 'subfinder -d <target>', 'httpx -u <target>', 'nmap -sV -p 80,443 <target>', 'nuclei -u <target>').",
+            "description": (
+                "Run a shell command inside the non-root Docker sandbox. Use the EXACT syntax for this sandbox: "
+                "subdomains 'subfinder -d <target>'; HTTP probe 'httpx-toolkit -u <target> -tech-detect -status-code' "
+                "(NOT 'httpx', which here is the Python client); ports 'nmap -sT -Pn -sV -p 80,443 <target>' "
+                "(use -sT connect scan; SYN/-sS needs root and will fail); crawl 'katana -u http://<target>'; "
+                "vuln scan 'nuclei -u <target> -severity critical,high -rl 50'. One action at a time."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -293,6 +299,12 @@ def _auto_repair_command(cmd: str) -> str:
                     other_args.append(p)
             if target_arg:
                 cmd = f"nuclei -u {target_arg} {' '.join(other_args)}".strip()
+        # Rate-limit by default: without it nuclei opened thousands of
+        # connections and fragile targets (cloud/proxy) went unresponsive
+        # mid-scan. Add a modest -rl unless the model already set one.
+        low = cmd.lower()
+        if "-rl" not in low and "-rate-limit" not in low:
+            cmd = f"{cmd} -rl 50".strip()
 
     elif binary == "katana":
         has_input_flag = any(p in ("-u", "-list") for p in [p.lower() for p in parts[1:]])
