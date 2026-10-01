@@ -53,6 +53,10 @@ class AgentEngine:
         self._cmd_history: dict[str, dict] = {}   # sig -> {runs, ok, fail, summary}
         self._repeat_after_success = 0
         self._stagnation_aborted = False
+        # Continuous-learning loop: phases already enriched with KB playbooks,
+        # and whether anything new was learned this run.
+        self._consulted_phases: set[str] = set()
+        self._learned_count = 0
 
     # -- Public API ---------------------------------------------------------
 
@@ -120,6 +124,15 @@ class AgentEngine:
                 }
                 pt_phase = phase_names_pt.get(self.current_phase, self.current_phase)
                 yield {"type": "thinking", "content": f"Iteração {self.iteration} — Fase: {pt_phase} ({self.current_phase})"}
+
+                # Continuous learning (recall): enrich the new phase with proven
+                # techniques from the KB for whatever tech was detected.
+                consulted = await self._consult_playbooks()
+                if consulted:
+                    yield {"type": "checkpoint", "subtype": "playbook_recall",
+                           "phase": self.current_phase, "keywords": consulted["keywords"],
+                           "count": consulted["count"],
+                           "content": f"Memória de longo prazo consultada ({consulted['count']} técnica(s) para: {consulted['keywords']})"}
 
                 # Hybrid routing: fast tactical tier for recon/scan tools, deep tier for exploit/report
                 active_llm = self.deep_llm if self.current_phase in ("exploit", "report") else self.llm
@@ -278,6 +291,7 @@ class AgentEngine:
                     result = await self.tool_executor.execute_tool(tool_name, arguments)
                     if tool_name == "execute":
                         self._record_cmd_result(arguments.get("command", ""), result)
+                        await self._auto_learn(arguments.get("command", ""), result, self.current_phase)
 
                     tool_msg = self._format_tool_result(tool_name, result)
                     self.messages.append(tool_msg)
@@ -324,6 +338,7 @@ class AgentEngine:
             return
         if tool_name == "execute":
             self._record_cmd_result(arguments.get("command", ""), result)
+            await self._auto_learn(arguments.get("command", ""), result, self.current_phase)
 
         tool_msg = self._format_tool_result(tool_name, result)
         self.messages.append(tool_msg)
@@ -386,6 +401,110 @@ class AgentEngine:
         h["runs"] += 1
         h["ok" if ok else "fail"] += 1
         h["summary"] = summary
+
+    # -- Continuous-learning loop (deterministic playbook KB) ----------------
+
+    _TECH_TOKENS = (
+        "nginx", "apache", "iis", "express", "node", "nodejs", "php", "wordpress",
+        "joomla", "drupal", "tomcat", "spring", "springboot", "django", "flask",
+        "laravel", "react", "angular", "vue", "graphql", "jenkins", "gitlab",
+        "grafana", "kibana", "elastic", "mysql", "postgres", "mongodb", "redis",
+        "docker", "kubernetes", "jira", "confluence", "cloudflare", "iis",
+    )
+
+    def _detect_tech_keywords(self) -> str:
+        """Pull technology keywords from the living memory so we can look up
+        proven techniques for what was actually detected on the target."""
+        te = getattr(self, "tool_executor", None)
+        if not te or not hasattr(te, "_get_wiki_path"):
+            return ""
+        found: list[str] = []
+        try:
+            for section in ("attack_surface", "target_map"):
+                f = te._get_wiki_path(section)
+                if f.exists():
+                    text = f.read_text(encoding="utf-8", errors="replace").lower()
+                    for tok in self._TECH_TOKENS:
+                        if tok in text and tok not in found:
+                            found.append(tok)
+        except Exception:
+            pass
+        return " ".join(found[:5])
+
+    async def _consult_playbooks(self) -> dict | None:
+        """Before acting in a new phase, inject proven techniques from the KB for
+        the detected tech. This is the 'recall' half of continuous learning: it
+        does not rely on the (weak) model remembering to call query_playbook."""
+        if self.current_phase in self._consulted_phases:
+            return None
+        self._consulted_phases.add(self.current_phase)
+        pm = getattr(self.tool_executor, "playbook_mgr", None)
+        if not pm:
+            return None
+        kw = self._detect_tech_keywords()
+        if not kw:
+            return None
+        # Query per keyword and merge (FTS MATCH of a multi-word string ANDs the
+        # terms, which rarely matches a tech-specific playbook).
+        results, seen = [], set()
+        for term in kw.split():
+            try:
+                hits = await pm.search(term, limit=2)
+            except Exception:
+                continue
+            for r in hits:
+                rid = r.get("id") or r.get("title")
+                if rid not in seen:
+                    seen.add(rid)
+                    results.append(r)
+            if len(results) >= 3:
+                break
+        if not results:
+            return None
+        results = results[:3]
+        lines = []
+        for r in results:
+            steps = (r.get("steps") or r.get("commands") or "").replace("\n", " ")[:160]
+            lines.append(f"- {r.get('title', '')} ({r.get('category', '')}): {steps}")
+        hint = ("[MEMÓRIA DE LONGO PRAZO — técnicas já comprovadas para a tecnologia "
+                f"detectada ({kw}); reutilize se aplicável]\n" + "\n".join(lines))
+        self.messages.append({"role": "system", "content": hint})
+        return {"keywords": kw, "count": len(results), "hint": hint}
+
+    _LEARNABLE = {
+        "nmap", "subfinder", "dnsx", "httpx-toolkit", "httpx", "katana", "nuclei",
+        "ffuf", "feroxbuster", "gobuster", "sqlmap", "dalfox", "wpscan", "arjun", "whatweb",
+    }
+
+    async def _auto_learn(self, command: str, result: dict, phase: str) -> None:
+        """The 'store' half of continuous learning: when a command succeeds,
+        persist a generalized version to the KB so future operations reuse it.
+        Driven by the harness, not by the model calling save_playbook."""
+        pm = getattr(self.tool_executor, "playbook_mgr", None)
+        if not pm or not command:
+            return
+        out = result.get("output") if isinstance(result, dict) else None
+        if not isinstance(out, dict) or out.get("exit_code") != 0:
+            return  # learn only from successes
+        parts = command.split()
+        if not parts:
+            return
+        binary = parts[0].lower()
+        if binary not in self._LEARNABLE:
+            return
+        target = self.session.get("target") if isinstance(self.session, dict) else getattr(self.session, "target", None)
+        generalized = command.replace(target, "TARGET") if target else command
+        tech = binary.replace("-toolkit", "")
+        try:
+            await pm.save(
+                technology=tech,
+                technique=f"{tech}_{phase}_proven",
+                commands=generalized,
+                notes=f"Auto-aprendido pelo harness: comando bem-sucedido na fase '{phase}'.",
+            )
+            self._learned_count += 1
+        except Exception:
+            pass
 
     # -- Extended Thinking ---------------------------------------------------
 
@@ -775,7 +894,10 @@ class AgentEngine:
             "Responda em 3-5 frases diretas e profissionais."
         )
         try:
-            response = await self.deep_llm.chat(
+            # Use the FAST tier for the periodic self-check: it's a short progress
+            # reflection, and routing it to the 32B model stalled the loop ~3 min
+            # every 10 iterations. Keep the loop responsive.
+            response = await self.llm.chat(
                 messages=[
                     {"role": "system", "content": "Você é um avaliador técnico especialista em testes de intrusão e segurança cibernética."},
                     {"role": "user", "content": eval_prompt},

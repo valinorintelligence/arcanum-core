@@ -174,6 +174,49 @@ async def test_repeated_successful_command_is_skipped_not_failed(tmp_path):
     assert not any("falhou" in str(e.get("error", "")).lower() for e in events)
 
 
+# --- Continuous learning (store + recall) ---------------------------------
+
+@pytest.mark.asyncio
+async def test_continuous_learning_store_and_recall(tmp_path):
+    from arcanum.core.database import Database
+    from arcanum.agent.tools import ToolExecutor
+    db = Database(":memory:")
+    await db.connect()
+    await db.init_db()
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    te = ToolExecutor(sandbox=None, browser=None, workspace_dir=ws, db=db)
+    eng = AgentEngine(llm=None, tool_executor=te,
+                      session={"name": "op", "target": "victim.example.com", "mode": "manual"})
+    try:
+        # STORE: a successful command is persisted, generalized (no host leak).
+        await eng._auto_learn("nmap -sT -Pn -sV -p 80 victim.example.com",
+                              {"success": True, "output": {"exit_code": 0, "stdout": "80/tcp open"}}, "recon")
+        rows = await te.playbook_mgr.search("nmap", limit=5)
+        assert any("TARGET" in (r.get("steps") or "") for r in rows)
+        assert all("victim.example.com" not in (r.get("steps") or "") for r in rows)
+
+        # A FAILED command is not learned.
+        n_before = len(await te.playbook_mgr.search("ffuf", limit=9))
+        await eng._auto_learn("ffuf -u http://x/FUZZ", {"success": True, "output": {"exit_code": 1}}, "analysis")
+        assert len(await te.playbook_mgr.search("ffuf", limit=9)) == n_before
+
+        # RECALL: with Express detected in memory and an express playbook stored,
+        # the next phase is auto-enriched with the proven technique.
+        await te.playbook_mgr.save("express", "express_probe", "curl TARGET/actuator", "t")
+        (ws / "wiki").mkdir(parents=True, exist_ok=True)
+        (ws / "wiki" / "ATTACK_SURFACE.md").write_text("httpx: Express,Node.js", encoding="utf-8")
+        eng2 = AgentEngine(llm=None, tool_executor=te,
+                           session={"name": "op", "target": "victim.example.com", "mode": "manual"})
+        res = await eng2._consult_playbooks()
+        assert res and res["count"] >= 1
+        assert any("MEMÓRIA DE LONGO PRAZO" in m.get("content", "")
+                   for m in eng2.messages if m.get("role") == "system")
+        assert await eng2._consult_playbooks() is None  # once per phase
+    finally:
+        await db.close()
+
+
 # --- Token auth -----------------------------------------------------------
 
 def test_api_requires_token_and_ui_gets_it():
