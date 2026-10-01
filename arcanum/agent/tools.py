@@ -211,10 +211,24 @@ NATIVE_TOOLS: list[dict] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "query_graph",
+            "description": "Query the engagement knowledge graph (hosts, ports, services, technologies, endpoints, findings and their relationships). view='summary' returns the target topology; view='candidates' returns graph-derived candidate findings (exposed sensitive services).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "view": {"type": "string", "enum": ["summary", "candidates"]},
+                },
+                "required": [],
+            },
+        },
+    },
 ]
 
-RECON_TOOLS = {"execute", "read_memory", "update_memory", "query_playbook", "save_playbook", "read_file", "web_search"}
-ANALYSIS_TOOLS = {"execute", "search_cve", "create_finding", "read_memory", "update_memory", "query_playbook", "read_file", "web_search"}
+RECON_TOOLS = {"execute", "read_memory", "update_memory", "query_playbook", "save_playbook", "read_file", "web_search", "query_graph"}
+ANALYSIS_TOOLS = {"execute", "search_cve", "create_finding", "read_memory", "update_memory", "query_playbook", "read_file", "web_search", "query_graph"}
 
 
 def get_tools_for_phase(phase: str = "recon") -> list[dict]:
@@ -379,10 +393,16 @@ class ToolExecutor:
             pass  # keep class default
         self._findings: list[dict] = []
         self.playbook_mgr = None
+        self.graph_mgr = None
         if self.db:
             try:
                 from ..core.playbooks import PlaybookManager
                 self.playbook_mgr = PlaybookManager(self.db)
+            except Exception:
+                pass
+            try:
+                from ..core.graph import GraphManager
+                self.graph_mgr = GraphManager(self.db)
             except Exception:
                 pass
 
@@ -399,6 +419,7 @@ class ToolExecutor:
             "update_memory": self._handle_update_memory,
             "query_playbook": self._handle_query_playbook,
             "save_playbook": self._handle_save_playbook,
+            "query_graph": self._handle_query_graph,
         }
 
     async def execute_tool(self, tool_name: str, arguments: dict) -> dict:
@@ -451,6 +472,13 @@ class ToolExecutor:
 
         result = await self.sandbox.execute(container_id, command, timeout=timeout)
         self._auto_update_target_map(result.stdout)
+        # Feed the knowledge graph from this tool's output (hosts/ports/services/
+        # tech/endpoints) so the agent can reason over relationships, not just logs.
+        if self.graph_mgr and result.stdout:
+            try:
+                await self.graph_mgr.ingest_text(self.session_id, result.stdout)
+            except Exception:
+                pass
         return {
             "stdout": result.stdout[:50000],
             "stderr": result.stderr[:10000],
@@ -611,6 +639,16 @@ class ToolExecutor:
         # Trigger alerts
         if self.alert_engine:
             await self.alert_engine.scan_finding(finding)
+
+        # Link the finding into the knowledge graph (finding -> affects -> host).
+        if self.graph_mgr:
+            try:
+                await self.graph_mgr.add_finding(
+                    self.session_id, finding_id, title, severity,
+                    (affected or {}).get("url") if isinstance(affected, dict) else None,
+                )
+            except Exception:
+                pass
 
         return {"id": finding_id, "finding": finding, "status": "created"}
 
@@ -791,3 +829,21 @@ class ToolExecutor:
             except Exception as e:
                 return {"status": "error", "error": str(e)}
         return {"status": "error", "error": "Playbook manager not initialized"}
+
+    # -- Knowledge graph ------------------------------------------------------
+
+    async def _handle_query_graph(self, view: str = "summary") -> dict:
+        """Expose the engagement knowledge graph (assets + relationships) to the
+        agent. 'summary' = topology view; 'candidates' = graph-derived candidate
+        findings (exposed sensitive services)."""
+        if not self.graph_mgr:
+            return {"error": "Graph manager not initialized", "summary": ""}
+        try:
+            if view == "candidates":
+                cands = await self.graph_mgr.candidate_findings(self.session_id)
+                return {"view": "candidates", "candidates": cands, "count": len(cands)}
+            summary = await self.graph_mgr.summary(self.session_id)
+            counts = await self.graph_mgr.counts(self.session_id)
+            return {"view": "summary", "summary": summary, "counts": counts}
+        except Exception as e:
+            return {"error": str(e), "summary": ""}

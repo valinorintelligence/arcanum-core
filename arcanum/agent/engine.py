@@ -56,6 +56,7 @@ class AgentEngine:
         # Continuous-learning loop: phases already enriched with KB playbooks,
         # and whether anything new was learned this run.
         self._consulted_phases: set[str] = set()
+        self._synthesized_phases: set[str] = set()
         self._learned_count = 0
 
     # -- Public API ---------------------------------------------------------
@@ -73,11 +74,12 @@ class AgentEngine:
 
         # Append compact dynamic phase context if available
         mem_summary = self._get_living_memory_summary()
-        prompt_with_context = user_input
+        graph_ctx = await self._graph_summary_text()
+        prompt_with_context = f"{user_input}\n\n[Context: Phase={self.current_phase}]"
+        if graph_ctx:
+            prompt_with_context += f"\n{graph_ctx}"
         if mem_summary:
-            prompt_with_context = f"{user_input}\n\n[Context: Phase={self.current_phase}]\n{mem_summary}"
-        elif self.current_phase != "recon":
-            prompt_with_context = f"{user_input}\n\n[Context: Phase={self.current_phase}]"
+            prompt_with_context += f"\n{mem_summary}"
 
         self.messages.append({"role": "user", "content": prompt_with_context})
 
@@ -133,6 +135,15 @@ class AgentEngine:
                            "phase": self.current_phase, "keywords": consulted["keywords"],
                            "count": consulted["count"],
                            "content": f"Memória de longo prazo consultada ({consulted['count']} técnica(s) para: {consulted['keywords']})"}
+
+                # Graph-driven synthesis: when moving into analysis/report, turn
+                # the asset graph into candidate findings so the agent concludes.
+                if self.current_phase in ("analysis", "report"):
+                    synth = await self._synthesize_from_graph()
+                    if synth:
+                        yield {"type": "checkpoint", "subtype": "graph_synthesis",
+                               "phase": self.current_phase, "count": synth["count"],
+                               "content": f"Grafo gerou {synth['count']} achado(s) candidato(s) para confirmação"}
 
                 # Hybrid routing: fast tactical tier for recon/scan tools, deep tier for exploit/report
                 active_llm = self.deep_llm if self.current_phase in ("exploit", "report") else self.llm
@@ -505,6 +516,45 @@ class AgentEngine:
             self._learned_count += 1
         except Exception:
             pass
+
+    # -- Knowledge graph (recall + synthesis) --------------------------------
+
+    async def _graph_summary_text(self) -> str:
+        gm = getattr(self.tool_executor, "graph_mgr", None)
+        if not gm or not self.session_id_for_graph:
+            return ""
+        try:
+            return await gm.summary(self.session_id_for_graph)
+        except Exception:
+            return ""
+
+    @property
+    def session_id_for_graph(self):
+        te = getattr(self, "tool_executor", None)
+        return getattr(te, "session_id", None) if te else None
+
+    async def _synthesize_from_graph(self) -> dict | None:
+        """When entering analysis/report, surface graph-derived candidate
+        findings (exposed sensitive services) so the agent consolidates results
+        into findings instead of only scanning. Runs once per phase."""
+        if self.current_phase in self._synthesized_phases:
+            return None
+        self._synthesized_phases.add(self.current_phase)
+        gm = getattr(self.tool_executor, "graph_mgr", None)
+        if not gm or not self.session_id_for_graph:
+            return None
+        try:
+            cands = await gm.candidate_findings(self.session_id_for_graph)
+        except Exception:
+            return None
+        if not cands:
+            return None
+        lines = [f"- [{c['severity'].upper()}] {c['title']}" for c in cands]
+        hint = ("[ACHADOS CANDIDATOS — derivados do grafo do alvo. Para cada um CONFIRMADO, "
+                "registre com create_finding com evidência/PoC; descarte os não aplicáveis]\n"
+                + "\n".join(lines))
+        self.messages.append({"role": "system", "content": hint})
+        return {"count": len(cands), "candidates": cands}
 
     # -- Extended Thinking ---------------------------------------------------
 
@@ -1106,7 +1156,8 @@ Você realiza avaliações de segurança autorizadas utilizando ferramentas prof
 4. Siga o princípio do menor privilégio.
 5. Se descobrir credenciais, chaves de API ou dados sensíveis, guarde-os no cofre (stash_artifact) e mascare nas saídas.
 6. Apenas crie vulnerabilidades (create_finding) para falhas VERIFICADAS com PoC funcional.
-7. Mantenha consciência situacional: consulte a memória viva (read_memory) e playbooks (query_playbook).
+7. Mantenha consciência situacional: consulte a memória viva (read_memory), o grafo do alvo (query_graph) e playbooks (query_playbook).
+8. Use query_graph para ver hosts/portas/serviços/tecnologias já mapeados e os achados candidatos (serviços sensíveis expostos) antes de decidir o próximo passo — não re-escaneie o que já está no grafo.
 
 ## Modos de Operação
 - **autopilot**: Executa ferramentas automaticamente em cadeia. Avança pelas fases.

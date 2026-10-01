@@ -61,6 +61,32 @@ CREATE TABLE IF NOT EXISTS playbooks (
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Engagement knowledge graph (assets + relationships)
+CREATE TABLE IF NOT EXISTS graph_nodes (
+    id TEXT PRIMARY KEY,
+    session_id TEXT,
+    type TEXT NOT NULL,
+    key TEXT NOT NULL,
+    label TEXT,
+    attrs TEXT,          -- JSON
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(session_id, type, key)
+);
+
+CREATE TABLE IF NOT EXISTS graph_edges (
+    id TEXT PRIMARY KEY,
+    session_id TEXT,
+    src TEXT NOT NULL,
+    rel TEXT NOT NULL,
+    dst TEXT NOT NULL,
+    attrs TEXT,          -- JSON
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(session_id, src, rel, dst)
+);
+
+CREATE INDEX IF NOT EXISTS idx_graph_nodes_session ON graph_nodes(session_id, type);
+CREATE INDEX IF NOT EXISTS idx_graph_edges_session ON graph_edges(session_id);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS playbooks_fts USING fts5(
     technology, technique, commands, notes, content='playbooks', content_rowid='rowid'
 );

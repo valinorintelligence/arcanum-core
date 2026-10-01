@@ -217,6 +217,34 @@ async def test_continuous_learning_store_and_recall(tmp_path):
         await db.close()
 
 
+# --- Knowledge graph integration ------------------------------------------
+
+@pytest.mark.asyncio
+async def test_graph_query_tool_and_synthesis(tmp_path):
+    from arcanum.core.database import Database
+    from arcanum.agent.tools import ToolExecutor
+    db = Database(":memory:")
+    await db.connect()
+    await db.init_db()
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    te = ToolExecutor(sandbox=None, browser=None, workspace_dir=ws, db=db, session_id="op1")
+    assert te.graph_mgr is not None
+    try:
+        await te.graph_mgr.ingest_text("op1", "Nmap scan report for h.example.com (1.2.3.4)\n3306/tcp open mysql MySQL 8.0\n")
+        # query_graph tool returns topology + graph-derived candidates
+        r = await te.execute_tool("query_graph", {"view": "candidates"})
+        assert r["success"] and any("MySQL" in c["title"] for c in r["output"]["candidates"])
+        # engine surfaces candidates when entering analysis
+        eng = AgentEngine(llm=None, tool_executor=te,
+                          session={"name": "op1", "target": "h.example.com", "mode": "manual"})
+        synth = await eng._synthesize_from_graph()
+        assert synth and synth["count"] >= 1
+        assert any("ACHADOS CANDIDATOS" in m.get("content", "") for m in eng.messages)
+    finally:
+        await db.close()
+
+
 # --- Token auth -----------------------------------------------------------
 
 def test_api_requires_token_and_ui_gets_it():
