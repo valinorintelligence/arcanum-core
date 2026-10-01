@@ -238,8 +238,13 @@ class AgentEngine:
                     # Mode-based gating
                     risk = self._assess_risk(tool_name, arguments)
                     requires_approval = False
+                    # Internal bookkeeping tools never touch the target and carry
+                    # no risk — don't gate them (avoids approval spam on every
+                    # memory note / KB lookup observed in manual mode).
+                    INTERNAL_TOOLS = ("read_memory", "update_memory", "query_playbook",
+                                      "save_playbook", "search_cve")
                     if self.mode == MODE_MANUAL:
-                        requires_approval = tool_name not in ("read_memory", "query_playbook")
+                        requires_approval = tool_name not in INTERNAL_TOOLS
                     elif self.mode == MODE_COPILOT:
                         requires_approval = risk in ("MEDIUM", "HIGH")
                     elif self.mode == MODE_AUTOPILOT:
@@ -916,9 +921,10 @@ class AgentEngine:
         # Default based on tool name
         if tool_name == "execute":
             return "MEDIUM"
-        if tool_name in ("browser_action", "web_search", "read_file", "search_cve", "read_memory", "query_playbook"):
-            return "LOW"
-        if tool_name == "create_finding":
+        # Internal/bookkeeping tools carry no target-facing risk.
+        if tool_name in ("browser_action", "web_search", "read_file", "create_file",
+                         "search_cve", "read_memory", "update_memory",
+                         "query_playbook", "save_playbook", "create_finding"):
             return "LOW"
         return "MEDIUM"
 
