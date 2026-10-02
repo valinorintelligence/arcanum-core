@@ -61,7 +61,25 @@ class CVEKnowledgeBase:
                 INSERT INTO cves_fts(cves_fts, rowid, id, description)
                 VALUES('delete', old.rowid, old.id, old.description);
             END;
+            CREATE TABLE IF NOT EXISTS cve_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            );
         """)
+        await self._db.commit()
+
+    async def get_meta(self, key: str) -> str | None:
+        """Read a KB metadata value (e.g. the last incremental sync timestamp)."""
+        cur = await self._db.execute("SELECT value FROM cve_meta WHERE key = ?", (key,))
+        row = await cur.fetchone()
+        return row[0] if row else None
+
+    async def set_meta(self, key: str, value: str) -> None:
+        await self._db.execute(
+            "INSERT INTO cve_meta (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
         await self._db.commit()
 
     async def search(self, query: str, limit: int = 10) -> list[CVEEntry]:

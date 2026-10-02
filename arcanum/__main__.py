@@ -133,6 +133,94 @@ def stash_pull_cmd(item_id: str):
 # --- cve group ---
 
 
+def _parse_cve_item(item):
+    """Parse one NVD API 2.0 vulnerability item into a CVEEntry (or None)."""
+    from .core.cve_kb import CVEEntry
+    cve_data = item.get("cve", {})
+    cve_id = cve_data.get("id", "")
+    if not cve_id:
+        return None
+    desc = ""
+    for d in cve_data.get("descriptions", []):
+        if d.get("lang") == "en":
+            desc = d.get("value", "")
+            break
+    cvss_score = cvss_vector = None
+    metrics = cve_data.get("metrics", {})
+    for key in ("cvssMetricV31", "cvssMetricV30", "cvssMetricV2"):
+        if key in metrics and metrics[key]:
+            cd = metrics[key][0].get("cvssData", {})
+            cvss_score = cd.get("baseScore")
+            cvss_vector = cd.get("vectorString")
+            break
+    cwe_ids = []
+    for wp in cve_data.get("weaknesses", []):
+        for d in wp.get("description", []):
+            v = d.get("value", "")
+            if v.startswith("CWE-"):
+                cwe_ids.append(v)
+    published = cve_data.get("published", "")[:10] or None
+    return CVEEntry(id=cve_id, description=desc, cvss_score=cvss_score,
+                    cvss_vector=cvss_vector, cwe_ids=cwe_ids or None,
+                    exploit_available=False, published_at=published)
+
+
+async def _nvd_import_window(kb, w_start, w_end, date_param, ctx, echo):
+    """Page one <=120-day NVD window and import it. ``date_param`` is 'pub' or
+    'lastMod'. ``ctx`` is a mutable {'headers','delay'} dict so an invalid API
+    key can transparently fall back to keyless mode. Returns #CVEs imported."""
+    import httpx
+    import time
+    fmt = "%Y-%m-%dT%H:%M:%S.000"
+    sp, ep = (("pubStartDate", "pubEndDate") if date_param == "pub"
+              else ("lastModStartDate", "lastModEndDate"))
+    count = 0
+    start_idx = 0
+    while True:
+        url = ("https://services.nvd.nist.gov/rest/json/cves/2.0"
+               f"?{sp}={w_start.strftime(fmt)}&{ep}={w_end.strftime(fmt)}"
+               f"&startIndex={start_idx}&resultsPerPage=2000")
+        try:
+            async with httpx.AsyncClient(timeout=90) as client:
+                resp = await client.get(url, headers=ctx["headers"])
+                nvd_msg = (resp.headers.get("message") or "").lower()
+                if resp.status_code == 404 and "apikey" in nvd_msg:
+                    if ctx["headers"]:
+                        echo("  NVD rejeitou a NVD_API_KEY (Invalid apiKey). Continuando SEM chave...")
+                        ctx["headers"] = {}
+                        ctx["delay"] = 6.5
+                        continue
+                    echo("  NVD: Invalid apiKey. Pulando janela.")
+                    break
+                if resp.status_code in (403, 429, 503):
+                    echo("  Rate limited. Waiting 15s...")
+                    time.sleep(15)
+                    continue
+                resp.raise_for_status()
+                data = resp.json()
+        except Exception as e:
+            echo(f"  Error fetching {w_start:%Y-%m-%d}..{w_end:%Y-%m-%d}: {e}")
+            break
+        vulns = data.get("vulnerabilities", [])
+        entries = [e for e in (_parse_cve_item(it) for it in vulns) if e]
+        if entries:
+            await kb.bulk_import(entries)
+            count += len(entries)
+        total_results = data.get("totalResults", 0)
+        start_idx += len(vulns)
+        time.sleep(ctx["delay"])
+        if not vulns or start_idx >= total_results:
+            break
+    return count
+
+
+def _nvd_ctx():
+    """Build the request context (headers + rate-limit delay) from NVD_API_KEY."""
+    import os
+    key = os.environ.get("NVD_API_KEY", "").strip()
+    return {"headers": ({"apiKey": key} if key else {}), "delay": (0.8 if key else 6.5)}
+
+
 @main.group()
 def cve():
     """CVE knowledge base operations."""
@@ -285,12 +373,71 @@ def cve_update_cmd(year: int):
                 total += year_count
 
             final_count = await kb.count()
+            # Mark the moment we synced up to, so 'cve sync' can fetch only
+            # what changed afterwards (incremental daily updates).
+            await kb.set_meta("last_sync", datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.000"))
             click.echo(f"[OK] CVE database updated. Total: {final_count} CVEs ({total} new)")
         finally:
             await kb.close()
 
     click.echo("Updating CVE database from NVD API 2.0...")
     click.echo("(Rate-limited to ~50 requests/30s — large imports may take minutes)")
+    asyncio.run(_run())
+
+
+@cve.command("sync")
+@click.option("--days", "-d", default=None, type=int,
+              help="Force re-pulling the last N days (default: since last sync).")
+def cve_sync_cmd(days: int):
+    """Incrementally sync only CVEs created/modified since the last update.
+
+    Uses the NVD lastModStartDate feed, so a daily run fetches just the few
+    hundred CVEs that changed — ideal for a scheduled job."""
+    import asyncio
+    from datetime import datetime, timedelta
+    from .core.config import get_config
+    from .core.cve_kb import CVEKnowledgeBase
+
+    async def _run():
+        kb = CVEKnowledgeBase(get_config().cve_db)
+        await kb.connect()
+        try:
+            now = datetime.utcnow()
+            if days:
+                start = now - timedelta(days=days)
+            else:
+                last = await kb.get_meta("last_sync")
+                if last:
+                    try:
+                        start = datetime.strptime(last, "%Y-%m-%dT%H:%M:%S.000")
+                    except ValueError:
+                        start = now - timedelta(days=1)
+                    # small overlap to catch late enrichment at the boundary
+                    start = start - timedelta(minutes=30)
+                else:
+                    click.echo("  Sem marcador de sync — puxando as últimas 24h "
+                               "(rode 'arcanum cve update' para a carga inicial completa).")
+                    start = now - timedelta(days=1)
+
+            ctx = _nvd_ctx()
+            if not ctx["headers"]:
+                click.echo("  (Sem NVD_API_KEY — 5 req/30s.)")
+
+            # lastMod windows also cap at 120 days; chunk if the gap is larger.
+            total = 0
+            cur = start
+            while cur < now:
+                w_end = min(cur + timedelta(days=119), now)
+                total += await _nvd_import_window(kb, cur, w_end, "lastMod", ctx, click.echo)
+                cur = w_end + timedelta(seconds=1)
+
+            await kb.set_meta("last_sync", now.strftime("%Y-%m-%dT%H:%M:%S.000"))
+            final = await kb.count()
+            click.echo(f"[OK] Sync incremental concluído. {total} CVE(s) novos/atualizados. Total na base: {final}.")
+        finally:
+            await kb.close()
+
+    click.echo("Sincronizando CVEs (incremental via lastModStartDate)...")
     asyncio.run(_run())
 
 
