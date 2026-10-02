@@ -319,6 +319,43 @@ async def test_graph_query_tool_and_synthesis(tmp_path):
         await db.close()
 
 
+# --- Auto-report ----------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_auto_report_generated_from_findings(tmp_path, monkeypatch):
+    import json as _json
+    from arcanum.core.database import Database
+    from arcanum.agent.tools import ToolExecutor
+    import arcanum.core.config as cfg
+    monkeypatch.setenv("ARCANUM_DATA_DIR", str(tmp_path))
+    cfg.get_config.cache_clear()
+    try:
+        db = Database(tmp_path / "arcanum.db")
+        await db.connect()
+        await db.init_db()
+        await db.execute("INSERT INTO sessions (id, name, target, mode) VALUES (?,?,?,?)",
+                         ("op-1", "demo-op", "app.victim.com", "autopilot"))
+        await db.execute(
+            "INSERT INTO findings (id, session_id, title, type, severity, cvss_score, affected, verified) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            ("f1", "op-1", "SQL Injection em /api", "sqli", "critical", 9.8,
+             _json.dumps({"url": "https://app.victim.com/api"}), True))
+        te = ToolExecutor(sandbox=None, browser=None, workspace_dir=tmp_path / "ws", db=db, session_id="op-1")
+        eng = AgentEngine(llm=None, tool_executor=te,
+                          session={"id": "op-1", "name": "demo-op", "target": "app.victim.com", "mode": "autopilot"})
+        rep = await eng._generate_report()
+        assert rep and not rep.get("error")
+        assert rep["findings"] == 1
+        assert set(rep["reports"]) >= {"html", "md", "json"}
+        from pathlib import Path
+        assert Path(rep["reports"]["html"]).exists()
+        assert "SQL Injection em /api" in Path(rep["reports"]["html"]).read_text(encoding="utf-8")
+        assert await eng._generate_report() is None  # runs once
+        await db.close()
+    finally:
+        cfg.get_config.cache_clear()
+
+
 # --- Token auth -----------------------------------------------------------
 
 def test_api_requires_token_and_ui_gets_it():

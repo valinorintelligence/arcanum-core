@@ -58,6 +58,7 @@ class AgentEngine:
         # and whether anything new was learned this run.
         self._consulted_phases: set[str] = set()
         self._synthesized_phases: set[str] = set()
+        self._report_generated = False
         self._learned_count = 0
 
     # -- Public API ---------------------------------------------------------
@@ -154,6 +155,17 @@ class AgentEngine:
                         yield {"type": "checkpoint", "subtype": "graph_synthesis",
                                "phase": self.current_phase, "count": synth["count"],
                                "content": f"Grafo gerou {synth['count']} achado(s) candidato(s) para confirmação"}
+
+                # Auto-report: on reaching the report phase, generate the report
+                # artifact deterministically (before the slow deep-model turn), so
+                # an operation always ends with a report even if interrupted.
+                if self.current_phase == "report" and not self._report_generated:
+                    rep = await self._generate_report()
+                    if rep and not rep.get("error"):
+                        yield {"type": "report", "phase": "report",
+                               "findings": rep["findings"], "reports": rep["reports"],
+                               "content": (f"Relatório gerado automaticamente com {rep['findings']} "
+                                           f"finding(s): " + ", ".join(rep["reports"].values()))}
 
                 # Hybrid routing: fast tactical tier for recon/scan tools, deep tier for exploit/report
                 active_llm = self.deep_llm if self.current_phase in ("exploit", "report") else self.llm
@@ -648,6 +660,48 @@ class AgentEngine:
                           + "\n".join(f"- [{c['severity'].upper()}] {c['title']}" for c in cands))
         self.messages.append({"role": "system", "content": "\n\n".join(blocks)})
         return {"count": len(cands), "candidates": cands, "paths": len(paths)}
+
+    async def _generate_report(self) -> dict | None:
+        """Auto-generate the assessment report (HTML/MD/JSON) from the session's
+        findings when the operation concludes — so an operation always ends with
+        a report artifact, without relying on the model to trigger it. Runs once."""
+        if self._report_generated:
+            return None
+        self._report_generated = True
+        te = getattr(self, "tool_executor", None)
+        db = getattr(te, "db", None)
+        if not db:
+            return None
+        s = self.session
+        sid = s.get("id") if isinstance(s, dict) else getattr(s, "id", None)
+        name = (s.get("name") if isinstance(s, dict) else getattr(s, "name", None)) or "operation"
+        target = (s.get("target") if isinstance(s, dict) else getattr(s, "target", None)) or "unknown"
+        try:
+            rows = await db.fetch_all(
+                "SELECT * FROM findings WHERE session_id = ? ORDER BY created_at DESC", (sid,))
+        except Exception:
+            return None
+        parsed = []
+        for r in rows:
+            fd = dict(r)
+            for col in ("affected", "evidence", "poc", "cwe_ids"):
+                if isinstance(fd.get(col), str) and fd[col].strip():
+                    try:
+                        fd[col] = json.loads(fd[col])
+                    except Exception:
+                        pass
+            parsed.append(fd)
+        try:
+            from ..core.reports import ReportEngine, ReportConfig
+            from ..core.config import get_config
+            out_dir = get_config().ops_dir / name / "reports"
+            cfg = ReportConfig(title=f"Security Assessment - {target}")
+            results = await ReportEngine().export(
+                session=s if isinstance(s, dict) else {"name": name, "target": target, "mode": self.mode},
+                findings=parsed, output_dir=out_dir, formats=["html", "md", "json"], config=cfg)
+            return {"findings": len(parsed), "reports": {k: str(v) for k, v in results.items()}}
+        except Exception as e:
+            return {"error": str(e)}
 
     # -- Extended Thinking ---------------------------------------------------
 
