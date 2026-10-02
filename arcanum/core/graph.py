@@ -198,6 +198,93 @@ class GraphManager:
             lines.append("Tecnologias: " + ", ".join(sorted({t["label"] for t in techs}))[:200])
         return "\n".join(lines)
 
+    async def edges(self, session_id: str) -> list[dict]:
+        return await self.db.fetch_all(
+            "SELECT src, rel, dst FROM graph_edges WHERE session_id = ?", (session_id,))
+
+    async def attack_paths(self, session_id: str, limit: int = 8) -> list[dict]:
+        """Multi-hop traversal that chains assets into prioritized attack paths
+        (cred → host → exposed sensitive service / confirmed finding), instead of
+        a flat list. Ranked by severity so the agent pursues the real leads."""
+        nodes = {n["id"]: n for n in await self.nodes(session_id)}
+        out_adj, in_adj = {}, {}
+        for e in await self.edges(session_id):
+            out_adj.setdefault(e["src"], []).append((e["rel"], e["dst"]))
+            in_adj.setdefault(e["dst"], []).append((e["rel"], e["src"]))
+
+        def attrs(n):
+            try:
+                return json.loads(n.get("attrs") or "{}")
+            except Exception:
+                return {}
+
+        paths = []
+        for nid, n in nodes.items():
+            if n["type"] != HOST:
+                continue
+            host = n["key"]
+            ports = [nodes[d] for (r, d) in out_adj.get(nid, []) if r == "exposes" and d in nodes]
+            svc_by_port = {}
+            for p in ports:
+                for (r, d) in out_adj.get(p["id"], []):
+                    if r == "runs" and d in nodes:
+                        svc_by_port[p["key"]] = nodes[d]
+            techs = sorted({nodes[d]["label"] for (r, d) in out_adj.get(nid, []) if r == "uses" and d in nodes})
+            findings = [nodes[s] for (r, s) in in_adj.get(nid, [])
+                        if r == "affects" and s in nodes and nodes[s]["type"] == FINDING]
+            creds = [nodes[s] for (r, s) in in_adj.get(nid, [])
+                     if r in ("for", "authenticates") and s in nodes and nodes[s]["type"] == CRED]
+            sensitive = [p for p in ports if p["key"].split(":")[-1] in _SENSITIVE_PORTS]
+
+            sev, score = "info", 0
+            if findings:
+                sevs = [attrs(f).get("severity", "") for f in findings]
+                if "critical" in sevs:
+                    sev, score = "critical", 100
+                elif "high" in sevs:
+                    sev, score = "high", 80
+                else:
+                    sev, score = "medium", 60
+            elif sensitive:
+                sev, score = "high", 50
+            elif ports or techs:
+                sev, score = "medium", 20
+            if creds:
+                score += 15
+            if score == 0:
+                continue
+
+            segs = [f"host {host}"]
+            if ports:
+                segs.append("expõe " + ", ".join(
+                    p["label"] + (f"({svc_by_port[p['key']]['label']})" if p["key"] in svc_by_port else "")
+                    for p in ports[:6]))
+            if techs:
+                segs.append("tecnologias: " + ", ".join(techs[:5]))
+            if sensitive:
+                segs.append("SERVIÇO SENSÍVEL EXPOSTO: " + ", ".join(
+                    f"{_SENSITIVE_PORTS[p['key'].split(':')[-1]]}" for p in sensitive))
+            if creds:
+                segs.append("credencial disponível: " + ", ".join(c["label"] for c in creds[:3]))
+            if findings:
+                segs.append("findings: " + ", ".join(f["label"] for f in findings[:3]))
+            paths.append({"host": host, "severity": sev, "score": score, "chain": " → ".join(segs)})
+
+        paths.sort(key=lambda x: x["score"], reverse=True)
+        return paths[:limit]
+
+    async def add_cred(self, session_id: str, masked_label: str, for_host: str | None = None) -> None:
+        """Add a credential node (masked, never the secret) and optionally link it
+        to the host it is for — enabling cred→host attack-path hops."""
+        try:
+            cid = await self.add_node(session_id, CRED, masked_label, label=masked_label)
+            if for_host:
+                h = re.sub(r"^https?://", "", for_host).split("/")[0].split(":")[0]
+                host_id = await self.add_node(session_id, HOST, h)
+                await self.add_edge(session_id, cid, "for", host_id)
+        except Exception:
+            pass
+
     async def candidate_findings(self, session_id: str) -> list[dict]:
         """Derive candidate findings from the graph (exposed sensitive services).
         Deterministic, conservative — for operator review, not auto-confirmed."""

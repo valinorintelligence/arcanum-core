@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -215,11 +216,11 @@ NATIVE_TOOLS: list[dict] = [
         "type": "function",
         "function": {
             "name": "query_graph",
-            "description": "Query the engagement knowledge graph (hosts, ports, services, technologies, endpoints, findings and their relationships). view='summary' returns the target topology; view='candidates' returns graph-derived candidate findings (exposed sensitive services).",
+            "description": "Query the engagement knowledge graph (hosts, ports, services, technologies, endpoints, findings and their relationships). view='summary' returns the target topology; view='candidates' returns graph-derived candidate findings (exposed sensitive services); view='paths' returns prioritized multi-hop attack paths (credential → host → exposed service / finding).",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "view": {"type": "string", "enum": ["summary", "candidates"]},
+                    "view": {"type": "string", "enum": ["summary", "candidates", "paths"]},
                 },
                 "required": [],
             },
@@ -718,6 +719,19 @@ class ToolExecutor:
                 from ..core.models import StashType
                 try:
                     item = await self.stash_mgr.add(StashType(type), value, note, self.session_id)
+                    # Link secrets into the knowledge graph (MASKED, never the raw
+                    # value) so attack-path planning can chain cred → host.
+                    if self.graph_mgr and type in ("credential", "token", "hash"):
+                        try:
+                            v = str(value)
+                            masked = (v.split(":")[0] + ":***") if ":" in v else (v[:4] + "***")
+                            host = None
+                            m = re.search(r'([a-z0-9][a-z0-9.\-]*\.[a-z]{2,}|\d{1,3}(?:\.\d{1,3}){3})', str(note or ""), re.I)
+                            if m:
+                                host = m.group(1)
+                            await self.graph_mgr.add_cred(self.session_id, f"{type}:{masked}", host)
+                        except Exception:
+                            pass
                     return {"id": item.id, "status": "added", "type": type}
                 except ValueError:
                     return {"error": f"Invalid stash type: {type}. Use: credential, hash, host, range, payload, script, token"}
@@ -862,14 +876,18 @@ class ToolExecutor:
 
     async def _handle_query_graph(self, view: str = "summary") -> dict:
         """Expose the engagement knowledge graph (assets + relationships) to the
-        agent. 'summary' = topology view; 'candidates' = graph-derived candidate
-        findings (exposed sensitive services)."""
+        agent. view: 'summary' = topology; 'candidates' = graph-derived candidate
+        findings (exposed sensitive services); 'paths' = prioritized multi-hop
+        attack paths (cred → host → exposed service / finding)."""
         if not self.graph_mgr:
             return {"error": "Graph manager not initialized", "summary": ""}
         try:
             if view == "candidates":
                 cands = await self.graph_mgr.candidate_findings(self.session_id)
                 return {"view": "candidates", "candidates": cands, "count": len(cands)}
+            if view == "paths":
+                paths = await self.graph_mgr.attack_paths(self.session_id)
+                return {"view": "paths", "paths": paths, "count": len(paths)}
             summary = await self.graph_mgr.summary(self.session_id)
             counts = await self.graph_mgr.counts(self.session_id)
             return {"view": "summary", "summary": summary, "counts": counts}

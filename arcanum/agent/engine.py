@@ -633,16 +633,21 @@ class AgentEngine:
             return None
         try:
             cands = await gm.candidate_findings(self.session_id_for_graph)
+            paths = await gm.attack_paths(self.session_id_for_graph)
         except Exception:
             return None
-        if not cands:
+        if not cands and not paths:
             return None
-        lines = [f"- [{c['severity'].upper()}] {c['title']}" for c in cands]
-        hint = ("[ACHADOS CANDIDATOS — derivados do grafo do alvo. Para cada um CONFIRMADO, "
-                "registre com create_finding com evidência/PoC; descarte os não aplicáveis]\n"
-                + "\n".join(lines))
-        self.messages.append({"role": "system", "content": hint})
-        return {"count": len(cands), "candidates": cands}
+        blocks = []
+        if paths:
+            blocks.append("[CAMINHOS DE ATAQUE — priorizados pelo grafo; persiga os de maior severidade]\n"
+                          + "\n".join(f"- [{p['severity'].upper()}] {p['chain']}" for p in paths[:6]))
+        if cands:
+            blocks.append("[ACHADOS CANDIDATOS — para cada um CONFIRMADO, registre com create_finding "
+                          "(evidência/PoC); descarte os não aplicáveis]\n"
+                          + "\n".join(f"- [{c['severity'].upper()}] {c['title']}" for c in cands))
+        self.messages.append({"role": "system", "content": "\n\n".join(blocks)})
+        return {"count": len(cands), "candidates": cands, "paths": len(paths)}
 
     # -- Extended Thinking ---------------------------------------------------
 

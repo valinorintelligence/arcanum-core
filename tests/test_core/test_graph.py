@@ -67,3 +67,27 @@ async def test_add_finding_links_to_host(graph):
     await g.ingest_text("s1", NMAP)
     await g.add_finding("s1", "finding-1", "SQLi", "critical", "http://host.example.com/api")
     assert (await g.counts("s1")).get("finding") == 1
+
+
+@pytest.mark.asyncio
+async def test_attack_paths_multi_hop_prioritized(graph):
+    g, _ = graph
+    await g.ingest_text("s1", NMAP)  # 80, 443, 3306(mysql)
+    await g.add_finding("s1", "f1", "SQL Injection em /api", "critical", "http://host.example.com/api")
+    await g.add_cred("s1", "credential:admin:***", "host.example.com")
+    paths = await g.attack_paths("s1")
+    assert paths, "expected at least one attack path"
+    top = paths[0]
+    assert top["severity"] == "critical"           # finding-driven priority
+    assert "host.example.com" in top["chain"]        # host hop
+    assert "MySQL" in top["chain"]                   # sensitive-service hop
+    assert "admin:***" in top["chain"]               # credential hop (masked)
+    assert "SQL Injection" in top["chain"]           # finding hop
+    # secret never leaked in the graph
+    assert "admin:P@" not in top["chain"]
+
+
+@pytest.mark.asyncio
+async def test_attack_paths_empty_without_assets(graph):
+    g, _ = graph
+    assert await g.attack_paths("empty-session") == []
