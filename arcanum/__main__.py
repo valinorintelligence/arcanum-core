@@ -209,6 +209,20 @@ def cve_update_cmd(year: int):
                         try:
                             async with httpx.AsyncClient(timeout=90) as client:
                                 resp = await client.get(url, headers=headers)
+                                nvd_msg = (resp.headers.get("message") or "").lower()
+                                # NVD returns 404 "Invalid apiKey" when the key is
+                                # wrong or not activated yet. Fall back to keyless
+                                # mode (works, just slower) instead of failing.
+                                if resp.status_code == 404 and "apikey" in nvd_msg:
+                                    if headers:
+                                        click.echo("  NVD rejeitou a NVD_API_KEY (Invalid apiKey). "
+                                                   "Ative a chave pelo link do e-mail do NVD ou remova-a. "
+                                                   "Continuando SEM chave (mais lento)...")
+                                        headers = {}
+                                        delay = 6.5
+                                        continue
+                                    click.echo("  NVD: Invalid apiKey. Pulando janela.")
+                                    break
                                 if resp.status_code in (403, 429, 503):
                                     click.echo("  Rate limited. Waiting 15s...")
                                     time.sleep(15)
