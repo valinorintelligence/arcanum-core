@@ -243,6 +243,54 @@ async def test_continuous_learning_store_and_recall(tmp_path):
         await db.close()
 
 
+# --- Scope enforcement ----------------------------------------------------
+
+def _eng(target, scope=None):
+    return AgentEngine(llm=None, tool_executor=None,
+                       session={"name": "o", "target": target, "scope": scope, "mode": "autopilot"})
+
+
+def test_scope_allows_target_blocks_others():
+    t = "app.target.com"
+    e = _eng(t)
+    assert e._scope_violation("execute", {"command": f"nmap -sT -Pn {t}"}) is None
+    assert e._scope_violation("execute", {"command": f"httpx-toolkit -u https://api.{t}"}) is None
+    assert e._scope_violation("execute", {"command": "nmap -sT google.com"}) == "google.com"
+    assert e._scope_violation("browser_action", {"url": "https://evil.example.com/x"}) == "evil.example.com"
+
+
+def test_scope_no_false_positive_on_file_paths():
+    t = "app.target.com"
+    e = _eng(t)
+    # wordlist / output paths and tool flags must not be read as out-of-scope hosts
+    assert e._scope_violation("execute", {"command": f"ffuf -u https://{t}/FUZZ -w /opt/seclists/Discovery/Web-Content/common.txt"}) is None
+    assert e._scope_violation("execute", {"command": f"nmap -sT -Pn -oA /workspace/output/nmap {t}"}) is None
+    assert e._scope_violation("execute", {"command": f"nuclei -u {t} -severity critical,high -rl 50"}) is None
+
+
+def test_scope_cidr_and_exclude():
+    e = _eng("10.0.0.0/24")
+    assert e._scope_violation("execute", {"command": "nmap -sT 10.0.0.5"}) is None
+    assert e._scope_violation("execute", {"command": "nmap -sT 10.0.1.5"}) == "10.0.1.5"
+    es = _eng("example.com", scope={"include": ["*.example.com", "example.com"], "exclude": ["secret.example.com"]})
+    assert es._scope_violation("execute", {"command": "nmap -sT secret.example.com"}) == "secret.example.com"
+
+
+def test_scope_not_enforced_without_scope():
+    assert _eng("")._scope_violation("execute", {"command": "nmap -sT whatever.com"}) is None
+
+
+# --- Error -> recovery hints ----------------------------------------------
+
+def test_recovery_hint_maps_known_errors():
+    H = AgentEngine._recovery_hint
+    assert H("httpx x", {"output": {"exit_code": 2, "stderr": "Error: No such option: -u"}}) is not None
+    assert "sT" in H("nmap x", {"output": {"exit_code": 1, "stderr": "Couldn't open a raw socket. Operation not permitted"}})
+    assert "seclists" in H("ffuf x", {"output": {"exit_code": 1, "stderr": "no such file or directory"}})
+    # a successful command yields no hint
+    assert H("nmap x", {"output": {"exit_code": 0, "stdout": "80/tcp open"}}) is None
+
+
 # --- Knowledge graph integration ------------------------------------------
 
 @pytest.mark.asyncio

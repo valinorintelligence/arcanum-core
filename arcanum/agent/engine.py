@@ -23,6 +23,7 @@ CHECKPOINT_EVAL_INTERVAL = 5     # Phase evaluation every N iterations
 SELF_EVAL_INTERVAL = 10          # Self-evaluation every N iterations
 CONTEXT_COMPRESS_INTERVAL = 15   # Context compression every N iterations
 MAX_ITERATIONS = 50              # Safety limit per run
+MAX_RUN_SECONDS = 1800           # Wall-clock watchdog per continuous loop (30 min)
 
 
 class AgentEngine:
@@ -95,7 +96,16 @@ class AgentEngine:
 
     async def _run_loop(self) -> AsyncGenerator[dict, None]:
         """Internal execution loop driven by LLM tool-calling."""
+        import time as _time
+        loop_started = _time.monotonic()
         while self.iteration < MAX_ITERATIONS:
+            # Wall-clock watchdog: a few very slow local-model inferences could
+            # otherwise keep a run alive indefinitely. Stop gracefully.
+            if _time.monotonic() - loop_started > MAX_RUN_SECONDS:
+                yield {"type": "error", "subtype": "run_timeout", "iteration": self.iteration,
+                       "error": (f"Tempo máximo de execução ({MAX_RUN_SECONDS // 60} min) atingido. "
+                                 "Operação pausada — reveja os resultados ou continue com uma nova instrução.")}
+                return
             self.iteration += 1
 
             # --- Checkpoint system ---
@@ -248,6 +258,22 @@ class AgentEngine:
                             self._stagnation_aborted = True
                             return
 
+                    # Scope enforcement (deterministic, NOT model-trusted): never
+                    # touch a host outside the authorized scope, in any mode.
+                    offending = self._scope_violation(tool_name, arguments)
+                    if offending:
+                        self.messages.append({
+                            "role": "tool", "name": tool_name,
+                            "content": (f"[FORA DE ESCOPO] O host '{offending}' nao esta no escopo "
+                                        f"autorizado ({self._scope_label()}). Acao BLOQUEADA — nada foi "
+                                        "executado. Teste apenas alvos dentro do escopo."),
+                        })
+                        yield {"type": "error", "subtype": "scope_blocked", "tool": tool_name,
+                               "iteration": self.iteration,
+                               "error": (f"Ação bloqueada por escopo: '{offending}' está fora do escopo "
+                                         f"autorizado ({self._scope_label()}). Nada foi executado.")}
+                        continue
+
                     explanation = self._explain_tool_action(tool_name, arguments)
 
                     yield {
@@ -306,6 +332,10 @@ class AgentEngine:
 
                     tool_msg = self._format_tool_result(tool_name, result)
                     self.messages.append(tool_msg)
+                    if tool_name == "execute":
+                        _hint = self._recovery_hint(arguments.get("command", ""), result)
+                        if _hint:
+                            self.messages.append({"role": "system", "content": f"[DICA DE CORREÇÃO] {_hint}"})
 
                     tool_out = result.get("output") or result.get("stdout") or result.get("error") or "Sucesso"
                     yield {
@@ -353,6 +383,10 @@ class AgentEngine:
 
         tool_msg = self._format_tool_result(tool_name, result)
         self.messages.append(tool_msg)
+        if tool_name == "execute":
+            _hint = self._recovery_hint(arguments.get("command", ""), result)
+            if _hint:
+                self.messages.append({"role": "system", "content": f"[DICA DE CORREÇÃO] {_hint}"})
 
         tool_out = result.get("output") or result.get("stdout") or result.get("error") or "Sucesso"
         yield {
@@ -412,6 +446,40 @@ class AgentEngine:
         h["runs"] += 1
         h["ok" if ok else "fail"] += 1
         h["summary"] = summary
+
+    @staticmethod
+    def _recovery_hint(command: str, result: dict) -> str | None:
+        """Map a failed command's error to a concrete corrective hint, so the
+        (small) model self-corrects instead of blindly repeating."""
+        out = result.get("output") if isinstance(result, dict) else None
+        err = ""
+        if isinstance(out, dict):
+            if out.get("exit_code", 0) == 0:
+                return None
+            err = ((out.get("stderr") or "") + " " + (out.get("stdout") or "")).lower()
+        elif isinstance(result, dict) and result.get("error"):
+            err = str(result.get("error")).lower()
+        if not err:
+            return None
+        binary = (command or "").split()[0] if command else "a ferramenta"
+        rules = [
+            (("command not found", "not found", "executable file not found"),
+             f"'{binary}' não está instalado no sandbox. Use uma ferramenta equivalente ou pule este passo."),
+            (("no such option", "unknown flag", "unknown shorthand", "usage:"),
+             f"Sintaxe inválida para '{binary}'. Revise as flags (httpx-toolkit usa -u; nmap usa -sT; nuclei usa -u)."),
+            (("operation not permitted", "raw socket", "dnet:"),
+             "Sem privilégio no sandbox: use nmap -sT (TCP connect), não -sS/SYN."),
+            (("no such file or directory",),
+             "Caminho inexistente. Wordlists ficam em /opt/seclists; grave saídas em /workspace/output."),
+            (("timed out", "timeout", "i/o timeout"),
+             "O alvo respondeu devagar/limitou. Reduza o escopo (menos portas/templates) ou use -rl."),
+            (("could not resolve", "name or service not known", "no such host"),
+             "Falha de DNS no alvo. Confirme o host ou tente pelo IP."),
+        ]
+        for needles, hint in rules:
+            if any(n in err for n in needles):
+                return hint
+        return None
 
     # -- Continuous-learning loop (deterministic playbook KB) ----------------
 
@@ -1071,6 +1139,117 @@ class AgentEngine:
             f"7. Create findings for all confirmed vulnerabilities\n\n"
             f"Analyze all output at each step. Chain results between steps."
         )
+
+    # -- Scope enforcement --------------------------------------------------
+
+    # File extensions that look like hostnames (end in a dotted suffix) but are
+    # really file paths — must NOT be treated as scan targets.
+    _FILE_EXT_DENY = {
+        "txt", "json", "html", "htm", "php", "js", "css", "xml", "csv", "md",
+        "log", "sh", "py", "conf", "cfg", "ini", "yaml", "yml", "bak", "sql",
+        "zip", "tar", "gz", "tgz", "png", "jpg", "jpeg", "gif", "hprof", "pem",
+        "key", "crt", "pdf", "out", "list", "dic", "jsonl", "ttf",
+    }
+
+    @staticmethod
+    def _is_cidr(s: str) -> bool:
+        import ipaddress
+        try:
+            ipaddress.ip_network(s, strict=False)
+            return "/" in s
+        except ValueError:
+            return False
+
+    def _extract_target_hosts(self, text: str) -> set:
+        """Pull candidate target hosts/IPs from a shell command or URL, while
+        avoiding false positives from file paths (e.g. wordlist.txt, -oA out)."""
+        hosts = set()
+        if not text:
+            return hosts
+        for h in re.findall(r'https?://([A-Za-z0-9._\-]+)', text):
+            hosts.add(h.split(':')[0].lower().rstrip('.'))
+        for ip in re.findall(r'\b(\d{1,3}(?:\.\d{1,3}){3})\b', text):
+            hosts.add(ip)
+        # bare domains: exclude when preceded by '/', '.', '-', '@' or a word char
+        # so we never match a path component or a SUFFIX inside a larger host.
+        for m in re.finditer(r'(?<![/\w.\-@])([A-Za-z0-9][A-Za-z0-9\-]*(?:\.[A-Za-z0-9\-]+)+)', text):
+            tok = m.group(1).lower().rstrip('.')
+            if re.fullmatch(r'\d{1,3}(?:\.\d{1,3}){3}', tok):
+                hosts.add(tok)
+                continue
+            if tok.rsplit('.', 1)[-1] in self._FILE_EXT_DENY:
+                continue
+            hosts.add(tok)
+        return hosts
+
+    def _scope_spec(self):
+        """Return (include_globs, exclude_globs, cidrs) derived from the session
+        scope and target. Empty includes+cidrs means 'no scope defined'."""
+        s = self.session
+        target = (s.get("target") if isinstance(s, dict) else getattr(s, "target", "")) or ""
+        scope = s.get("scope") if isinstance(s, dict) else getattr(s, "scope", None)
+        if isinstance(scope, str):
+            try:
+                scope = json.loads(scope)
+            except Exception:
+                scope = None if scope.strip() in ("", "*") else {"include": [scope]}
+        includes, excludes, cidrs = [], [], []
+        if isinstance(scope, dict):
+            for x in (scope.get("include") or []):
+                x = str(x).lower()
+                (cidrs if self._is_cidr(x) else includes).append(x)
+            excludes = [str(x).lower() for x in (scope.get("exclude") or [])]
+        target = target.strip()
+        if target and target != "*":
+            if self._is_cidr(target):
+                cidrs.append(target.lower())
+            else:
+                t = re.sub(r'^https?://', '', target.lower()).split('/')[0].split(':')[0]
+                if t:
+                    if not includes and not cidrs:
+                        includes = [t, f"*.{t}"]
+                    elif t not in includes:
+                        includes.append(t)
+        return includes, excludes, cidrs
+
+    def _scope_label(self) -> str:
+        inc, exc, cidrs = self._scope_spec()
+        parts = inc + cidrs
+        return ", ".join(parts) if parts else "não definido"
+
+    def _host_in_scope(self, host: str, includes, excludes, cidrs) -> bool:
+        import fnmatch
+        import ipaddress
+        h = host.lower()
+        if h in ("localhost", "127.0.0.1", "::1") or h.startswith("127."):
+            return True  # sandbox loopback is internal, not the target
+        for ex in excludes:
+            if h == ex or fnmatch.fnmatch(h, ex):
+                return False
+        try:
+            ip = ipaddress.ip_address(h)
+            for c in cidrs:
+                if ip in ipaddress.ip_network(c, strict=False):
+                    return True
+        except ValueError:
+            pass
+        for inc in includes:
+            if h == inc or fnmatch.fnmatch(h, inc):
+                return True
+        return False
+
+    def _scope_violation(self, tool_name: str, arguments: dict):
+        """Return the first out-of-scope host for a target-touching tool, else None."""
+        if tool_name not in ("execute", "browser_action"):
+            return None
+        text = arguments.get("command", "") if tool_name == "execute" else arguments.get("url", "")
+        includes, excludes, cidrs = self._scope_spec()
+        if not includes and not cidrs:
+            return None  # no scope configured — cannot enforce (operator-driven)
+        for host in self._extract_target_hosts(text):
+            if not self._host_in_scope(host, includes, excludes, cidrs):
+                return host
+        return None
 
     # -- Risk Assessment for Copilot ----------------------------------------
 
