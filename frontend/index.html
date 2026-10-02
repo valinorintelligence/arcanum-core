@@ -1371,6 +1371,16 @@
                 this.currentSession.progress = msg.progress || this.currentSession.progress;
               }
               break;
+            case 'report':
+              this.agentBusy = false;
+              this.messages.push({
+                type: 'system',
+                content: '[RELATÓRIO GERADO] ' + (msg.content
+                  || ((msg.findings ?? 0) + ' finding(s) — ' + Object.values(msg.reports || {}).join(', '))),
+                timestamp: ts,
+              });
+              if (typeof this.fetchReports === 'function') { try { this.fetchReports(); } catch (e) {} }
+              break;
             default:
               this.messages.push({ type: 'system', content: msg.content || JSON.stringify(msg), timestamp: ts });
           }
