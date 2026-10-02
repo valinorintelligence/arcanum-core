@@ -423,6 +423,16 @@ class ToolExecutor:
                 self.graph_mgr = GraphManager(self.db)
             except Exception:
                 pass
+            try:
+                from ..core.vectordb import SemanticIndex, EmbeddingClient
+                from ..core.config import get_config as _gc
+                _cfg = _gc()
+                self.semantic_index = SemanticIndex(
+                    self.db, EmbeddingClient(base_url=_cfg.ollama_url, model=_cfg.embed_model))
+            except Exception:
+                self.semantic_index = None
+        else:
+            self.semantic_index = None
 
         self._handlers: dict[str, Any] = {
             "execute": self._handle_execute,

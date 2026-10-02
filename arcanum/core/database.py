@@ -87,6 +87,19 @@ CREATE TABLE IF NOT EXISTS graph_edges (
 CREATE INDEX IF NOT EXISTS idx_graph_nodes_session ON graph_nodes(session_id, type);
 CREATE INDEX IF NOT EXISTS idx_graph_edges_session ON graph_edges(session_id);
 
+-- Semantic retrieval (RAG): embeddings stored as float32 BLOBs per collection
+CREATE TABLE IF NOT EXISTS vectors (
+    id TEXT PRIMARY KEY,          -- "<collection>:<ref_id>"
+    collection TEXT NOT NULL,
+    ref_id TEXT NOT NULL,
+    text TEXT,
+    dim INTEGER,
+    vec BLOB,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(collection, ref_id)
+);
+CREATE INDEX IF NOT EXISTS idx_vectors_collection ON vectors(collection);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS playbooks_fts USING fts5(
     technology, technique, commands, notes, content='playbooks', content_rowid='rowid'
 );

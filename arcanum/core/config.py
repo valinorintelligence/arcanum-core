@@ -71,6 +71,10 @@ class ArcanumConfig(BaseSettings):
     ollama_num_predict: int = 256
     ollama_enable_thinking: bool = False
     ollama_repeat_penalty: float = 1.05
+    # Embedding model for semantic retrieval (RAG). Pull with:
+    #   ollama pull nomic-embed-text
+    # If unavailable, recall gracefully falls back to keyword (FTS) search.
+    embed_model: str = "nomic-embed-text"
 
     # Sandbox
     sandbox_image: str = "arcanum-sandbox:latest"

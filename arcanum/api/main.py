@@ -59,6 +59,21 @@ async def lifespan(app: FastAPI):
         pass
     app.state.playbook_mgr = pm
 
+    # Semantic index (RAG): embed playbooks so the agent recalls techniques by
+    # meaning, not just keyword. Non-fatal — skips silently if the embedding
+    # model isn't pulled (recall then uses keyword FTS).
+    try:
+        from ..core.vectordb import SemanticIndex, EmbeddingClient, playbook_embed_text
+        si = SemanticIndex(db, EmbeddingClient(base_url=config.ollama_url, model=config.embed_model))
+        rows = await pm.search("", limit=1000)
+        items = [(r.get("id"), playbook_embed_text(r)) for r in rows if r.get("id")]
+        indexed = await si.index_items("playbooks", items)
+        if indexed:
+            import logging
+            logging.getLogger("arcanum").info(f"RAG: {indexed} playbook(s) indexado(s) semanticamente.")
+    except Exception:
+        pass
+
     # Initialize Docker Sandbox
     try:
         from ..sandbox.docker import SandboxManager

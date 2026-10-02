@@ -523,32 +523,44 @@ class AgentEngine:
         kw = self._detect_tech_keywords()
         if not kw:
             return None
-        # Query per keyword and merge (FTS MATCH of a multi-word string ANDs the
-        # terms, which rarely matches a tech-specific playbook).
-        results, seen = [], set()
-        for term in kw.split():
+
+        lines, mode = [], "keyword"
+        # 1) Semantic recall (RAG) — retrieves by meaning, not exact keyword.
+        si = getattr(self.tool_executor, "semantic_index", None)
+        if si:
             try:
-                hits = await pm.search(term, limit=2)
+                hits = await si.search("playbooks", kw, top_k=3)
             except Exception:
-                continue
-            for r in hits:
-                rid = r.get("id") or r.get("title")
-                if rid not in seen:
-                    seen.add(rid)
-                    results.append(r)
-            if len(results) >= 3:
-                break
-        if not results:
+                hits = None
+            if hits:
+                mode = "semantic"
+                lines = [f"- {h['text']}" for h in hits]
+
+        # 2) Keyword (FTS) fallback — per term, merged (multi-word MATCH ANDs).
+        if not lines:
+            results, seen = [], set()
+            for term in kw.split():
+                try:
+                    found = await pm.search(term, limit=2)
+                except Exception:
+                    continue
+                for r in found:
+                    rid = r.get("id") or r.get("title")
+                    if rid not in seen:
+                        seen.add(rid)
+                        results.append(r)
+                if len(results) >= 3:
+                    break
+            for r in results[:3]:
+                steps = (r.get("steps") or r.get("commands") or "").replace("\n", " ")[:160]
+                lines.append(f"- {r.get('title', '')} ({r.get('category', '')}): {steps}")
+
+        if not lines:
             return None
-        results = results[:3]
-        lines = []
-        for r in results:
-            steps = (r.get("steps") or r.get("commands") or "").replace("\n", " ")[:160]
-            lines.append(f"- {r.get('title', '')} ({r.get('category', '')}): {steps}")
         hint = ("[MEMÓRIA DE LONGO PRAZO — técnicas já comprovadas para a tecnologia "
                 f"detectada ({kw}); reutilize se aplicável]\n" + "\n".join(lines))
         self.messages.append({"role": "system", "content": hint})
-        return {"keywords": kw, "count": len(results), "hint": hint}
+        return {"keywords": kw, "count": len(lines), "hint": hint, "mode": mode}
 
     _LEARNABLE = {
         "nmap", "subfinder", "dnsx", "httpx-toolkit", "httpx", "katana", "nuclei",
@@ -575,13 +587,21 @@ class AgentEngine:
         generalized = command.replace(target, "TARGET") if target else command
         tech = binary.replace("-toolkit", "")
         try:
-            await pm.save(
+            saved = await pm.save(
                 technology=tech,
                 technique=f"{tech}_{phase}_proven",
                 commands=generalized,
                 notes=f"Auto-aprendido pelo harness: comando bem-sucedido na fase '{phase}'.",
             )
             self._learned_count += 1
+            # Also index it semantically so it's recallable by meaning at once.
+            si = getattr(self.tool_executor, "semantic_index", None)
+            if si and isinstance(saved, dict) and saved.get("id"):
+                try:
+                    from ..core.vectordb import playbook_embed_text
+                    await si.index_items("playbooks", [(saved["id"], playbook_embed_text(saved))])
+                except Exception:
+                    pass
         except Exception:
             pass
 
