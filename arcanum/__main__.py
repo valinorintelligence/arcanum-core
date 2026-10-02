@@ -237,7 +237,9 @@ def cve_search_cmd(query: str):
 
 @cve.command("update")
 @click.option("--year", "-y", default=None, type=int, help="Specific year to fetch (default: current + previous)")
-def cve_update_cmd(year: int):
+@click.option("--from-year", "from_year", default=None, type=int,
+              help="Backfill every year from this one up to now (e.g. --from-year 2015 for history).")
+def cve_update_cmd(year: int, from_year: int):
     """Update the local CVE database from NVD API 2.0."""
     import asyncio
 
@@ -276,7 +278,12 @@ def cve_update_cmd(year: int):
                 cur = w_end + timedelta(seconds=1)
 
         try:
-            years = [year] if year else [datetime.now().year, datetime.now().year - 1]
+            if year:
+                years = [year]
+            elif from_year:
+                years = list(range(from_year, datetime.now().year + 1))
+            else:
+                years = [datetime.now().year, datetime.now().year - 1]
             total = 0
             if not api_key:
                 click.echo("  (Sem NVD_API_KEY — limite de 5 req/30s; defina NVD_API_KEY para acelerar.)")
