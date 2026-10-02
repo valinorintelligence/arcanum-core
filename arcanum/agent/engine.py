@@ -979,10 +979,13 @@ class AgentEngine:
             if len(recent_tools) >= 3:
                 new_phase = "analysis"
         elif self.current_phase == "analysis":
-            if any(t == "create_finding" for t in recent_tools):
+            # Only move to exploit if there is actually something to exploit.
+            # With zero findings after enough analysis, go straight to report
+            # (conclude) instead of a pointless, slow exploit phase.
+            if self.findings_count >= 1 or any(t == "create_finding" for t in recent_tools):
                 new_phase = "exploit"
             elif len(recent_tools) >= 5:
-                new_phase = "exploit"
+                new_phase = "report"
         elif self.current_phase == "exploit":
             if self.findings_count >= 1:
                 new_phase = "report"
@@ -1175,7 +1178,7 @@ IMPORTANTE: o sandbox roda SEM privilégio de root. Use SEMPRE a sintaxe abaixo.
 
 ### Fase 2: Análise (Analysis)
 - Varredura de vulnerabilidades: execute com 'nuclei -u {target} -severity critical,high -rl 50' (o -rl evita derrubar alvos frágeis)
-- Força-bruta de diretórios: execute com 'ffuf -u http://{target}/FUZZ -w /workspace/wordlists/common.txt'
+- Força-bruta de diretórios: execute com 'ffuf -u https://{target}/FUZZ -w /opt/seclists/Discovery/Web-Content/common.txt -mc 200,204,301,302,307,401,403' (as wordlists ficam em /opt/seclists)
 - Descoberta de parâmetros: execute com 'arjun -u http://{target}'
 - Pesquisa de CVEs conhecidos: search_cve com query da tecnologia detectada
 

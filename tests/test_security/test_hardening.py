@@ -101,6 +101,32 @@ def test_httpx_rewritten_to_projectdiscovery_binary():
     assert _auto_repair_command("httpx -l hosts.txt").startswith("httpx-toolkit -l ")
 
 
+def test_ffuf_wordlist_path_repaired_to_seclists():
+    # Models emit non-existent /workspace/wordlists/... which makes ffuf fail;
+    # it must be rewritten to the SecLists path present in the sandbox.
+    fixed = _auto_repair_command("ffuf -u http://x/FUZZ -w /workspace/wordlists/common.txt")
+    assert "/opt/seclists" in fixed and "/workspace/wordlists" not in fixed
+    # when no wordlist is given, inject a default one
+    assert "-w /opt/seclists" in _auto_repair_command("ffuf -u http://x/FUZZ")
+    # a valid SecLists path is left intact (no duplicate -w)
+    good = _auto_repair_command("ffuf -u http://x/FUZZ -w /opt/seclists/Discovery/Web-Content/raft-medium-directories.txt")
+    assert good.count("-w") == 1 and "raft-medium" in good
+
+
+@pytest.mark.asyncio
+async def test_analysis_with_zero_findings_goes_to_report_not_exploit():
+    # With no findings, analysis should conclude (report), not enter the slow,
+    # pointless exploit phase.
+    eng = AgentEngine(llm=object(), tool_executor=object(),
+                      session={"name": "o", "target": "x", "mode": "autopilot"})
+    eng.current_phase = "analysis"
+    eng.findings_count = 0
+    # simulate >=5 recent execute tool calls in history
+    eng.messages = [{"role": "assistant", "tool_calls": [{"function": {"name": "execute", "arguments": {}}}]} for _ in range(6)]
+    event = await eng._evaluate_phase()
+    assert event and event["to"] == "report"
+
+
 def test_nmap_without_scan_type_forces_connect():
     # Reproduces the operator's failure: no scan type -> nmap defaults to SYN
     # (raw socket) which fails as nobody. Must inject -sT.

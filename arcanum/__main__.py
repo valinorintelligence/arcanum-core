@@ -348,7 +348,13 @@ def serve(port: int, host: str):
             "Ensure ARCANUM_API_TOKEN is set and a TLS proxy is in front."
         )
     click.echo(f"Starting Arcanum Core Web UI on http://{host}:{port}")
-    uvicorn.run("arcanum.api.main:app", host=host, port=port, reload=False)
+    # Keep WebSockets alive during long local-model inferences (the 32B tier can
+    # take minutes on exploit/report). Without server pings the idle socket was
+    # being closed (code 1006) mid-reasoning. ping_timeout generous for slow GPUs.
+    uvicorn.run(
+        "arcanum.api.main:app", host=host, port=port, reload=False,
+        ws_ping_interval=20, ws_ping_timeout=300,
+    )
 
 
 # --- doctor ---

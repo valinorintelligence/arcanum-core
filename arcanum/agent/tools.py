@@ -355,6 +355,24 @@ def _auto_repair_command(cmd: str) -> str:
         prefix = "nmap" if has_pn else "nmap -Pn"
         cmd = f"{prefix} {' '.join(rest)}".strip()
 
+    elif binary in ("ffuf", "feroxbuster", "gobuster"):
+        # Wordlists live under /opt/seclists in the sandbox. Models often emit a
+        # non-existent path (e.g. /workspace/wordlists/common.txt), which makes
+        # ffuf print its help and exit 1. Rewrite known-bad paths to SecLists,
+        # and inject a default wordlist when none is provided.
+        default_wl = "/opt/seclists/Discovery/Web-Content/common.txt"
+        toks = parts[:]
+        has_w = False
+        for i, p in enumerate(toks):
+            if p in ("-w", "--wordlist") and i + 1 < len(toks):
+                has_w = True
+                wl = toks[i + 1]
+                if "/workspace/wordlists" in wl or wl.endswith("/common.txt") and "seclists" not in wl.lower():
+                    toks[i + 1] = default_wl
+        if not has_w:
+            toks += ["-w", default_wl]
+        cmd = " ".join(toks)
+
     return cmd
 
 
