@@ -52,10 +52,12 @@ def test_eval_auto_repair_nuclei():
 
 
 def test_eval_auto_repair_katana():
-    # Target without -u
+    # Target without -u gets -u, depth limit -d 2, and timeout -ct 60s
     cmd = "katana http://example.com"
     repaired = _auto_repair_command(cmd)
-    assert repaired == "katana -u http://example.com"
+    assert repaired.startswith("katana -u http://example.com")
+    assert "-d 2" in repaired
+    assert "-ct 60s" in repaired
 
 
 def test_eval_auto_repair_nmap_pn():

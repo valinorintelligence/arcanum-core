@@ -36,6 +36,7 @@ class OllamaClient:
         messages: list[dict],
         tools: list[dict] | None = None,
         fmt: str | None = None,
+        num_predict: int | None = None,
     ) -> dict:
         """Send a chat completion request to Ollama. Returns the response message.
 
@@ -54,7 +55,7 @@ class OllamaClient:
             "options": {
                 "num_ctx": self.num_ctx,
                 "temperature": self.temperature,
-                "num_predict": self.num_predict,
+                "num_predict": num_predict if num_predict is not None else self.num_predict,
                 "repeat_penalty": self.repeat_penalty,
             },
         }

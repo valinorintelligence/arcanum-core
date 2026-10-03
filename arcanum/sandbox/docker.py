@@ -51,6 +51,36 @@ class SandboxManager:
         await proc.wait()
         return proc.returncode == 0
 
+    async def prune_orphans(self) -> int:
+        """Find and remove stopped or exited arcanum-sandbox-* containers.
+
+        Returns:
+            Number of containers pruned.
+        """
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "docker", "ps", "-a",
+                "--filter", "name=arcanum-sandbox-",
+                "--filter", "status=exited",
+                "-q",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await proc.communicate()
+            if proc.returncode == 0 and stdout:
+                cids = [cid.strip() for cid in stdout.decode().splitlines() if cid.strip()]
+                if cids:
+                    rm_proc = await asyncio.create_subprocess_exec(
+                        "docker", "rm", "-f", *cids,
+                        stdout=asyncio.subprocess.DEVNULL,
+                        stderr=asyncio.subprocess.DEVNULL,
+                    )
+                    await rm_proc.wait()
+                    return len(cids)
+        except Exception:
+            pass
+        return 0
+
     async def create_container(
         self,
         workspace_dir: Path,
@@ -83,6 +113,11 @@ class SandboxManager:
             "--memory-swap", self.MEMORY_LIMIT,  # disallow swap growth
             "--pids-limit", "512",
             "--cpus", "2",
+            "-e", "HOME=/tmp",
+            "-e", "XDG_CONFIG_HOME=/tmp/.config",
+            "-e", "XDG_DATA_HOME=/tmp/.local/share",
+            "-e", "XDG_CACHE_HOME=/tmp/.cache",
+            "-w", "/workspace",
             "-v", f"{workspace_abs}:/workspace",
         ]
 
@@ -142,6 +177,18 @@ class SandboxManager:
         except asyncio.TimeoutError:
             proc.kill()
             await proc.wait()
+            # Clean up the orphaned process inside the container
+            try:
+                base_cmd = command.strip().split()[0] if command.strip() else ""
+                if base_cmd:
+                    kill_proc = await asyncio.create_subprocess_exec(
+                        "docker", "exec", container_id, "pkill", "-f", base_cmd,
+                        stdout=asyncio.subprocess.DEVNULL,
+                        stderr=asyncio.subprocess.DEVNULL,
+                    )
+                    await kill_proc.wait()
+            except Exception:
+                pass
             duration = time.time() - start
             return ExecutionResult(
                 command=command,

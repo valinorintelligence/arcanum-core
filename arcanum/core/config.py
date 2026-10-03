@@ -61,7 +61,7 @@ class ArcanumConfig(BaseSettings):
     ollama_url: str = "http://localhost:11434"
     ollama_model: str = "qwen2.5-coder:7b"
     ollama_fast_model: str = "qwen2.5-coder:7b"
-    ollama_deep_model: str = "qwen3:32b"
+    ollama_deep_model: str = "qwen2.5-coder:7b"
     ollama_fast_predict: int = 256
     ollama_deep_predict: int = 1024
     ollama_timeout: float = 600.0
@@ -99,6 +99,29 @@ class ArcanumConfig(BaseSettings):
 
     # Demo data is seeded only when this is true (never silently in prod).
     seed_demo: bool = False
+
+    # Enterprise Integrations (Jira, ServiceNow, SIEM, Webhooks)
+    jira_url: str = ""
+    jira_email: str = ""
+    jira_api_token: str = ""
+    jira_project_key: str = "SEC"
+    jira_issue_type: str = "Vulnerability"
+
+    servicenow_instance: str = ""
+    servicenow_user: str = ""
+    servicenow_password: str = ""
+
+    splunk_hec_url: str = ""
+    splunk_hec_token: str = ""
+    datadog_api_key: str = ""
+    datadog_site: str = "datadoghq.com"
+    elastic_url: str = ""
+    elastic_api_key: str = ""
+
+    slack_webhook_url: str = ""
+    teams_webhook_url: str = ""
+    custom_webhook_url: str = ""
+    webhook_secret: str = ""
 
     # Agent
     max_context_tokens: int = 32000

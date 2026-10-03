@@ -19,7 +19,8 @@ from ..core.demo_data import seed_all_demo_data
 from ..agent.llm import OllamaClient
 from ..agent.session import SessionManager
 
-from .routes import sessions, tools, findings, stash, cve, reports
+from .routes import sessions, tools, findings, stash, cve, reports, integrations, ctem, probes, identity, browser, mitre
+from .routes import eval as eval_router
 from .websocket import router as ws_router
 
 
@@ -44,6 +45,47 @@ async def lifespan(app: FastAPI):
     app.state.stash_mgr = StashManager(db)
     app.state.alert_engine = AlertEngine()
     app.state.report_engine = ReportEngine()
+
+    from ..integrations.hub import EnterpriseHub
+    app.state.enterprise_hub = EnterpriseHub(config=config, db=db)
+
+    from ..core.kev import CISAKEVEngine
+    from ..core.ctem import CTEMDaemon
+    kev_engine = CISAKEVEngine(db=db)
+    await kev_engine.init_tables()
+    app.state.kev_engine = kev_engine
+
+    ctem_daemon = CTEMDaemon(db=db, kev_engine=kev_engine, enterprise_hub=app.state.enterprise_hub)
+    await ctem_daemon.init_tables()
+    app.state.ctem_daemon = ctem_daemon
+    # Start the background scheduler loop — without this, CTEM schedules never
+    # run automatically (the dashboard "24/7 Ativo" was cosmetic). stop() is
+    # called on shutdown in this lifespan's cleanup.
+    ctem_daemon.start()
+
+    from ..probes.hub import ProbeHubManager
+    probe_hub = ProbeHubManager(db=db)
+    await probe_hub.init_tables()
+    app.state.probe_hub = probe_hub
+
+    from ..identity.analyzer import ADIdentityAnalyzer
+    identity_analyzer = ADIdentityAnalyzer(db_path=str(config.data_dir / "arcanum.db"))
+    app.state.identity_analyzer = identity_analyzer
+
+    from ..browser.agent import HeadlessBrowserAgent
+    # browser_available must reflect whether Playwright is actually installed.
+    # If not, the agent silently falls back to a SIMULATED audit that fabricates
+    # findings — so we detect it honestly instead of claiming availability.
+    try:
+        import playwright  # noqa: F401
+        _playwright_available = True
+    except Exception:
+        _playwright_available = False
+    browser_agent = HeadlessBrowserAgent(browser_available=_playwright_available)
+    app.state.browser_agent = browser_agent
+    if not _playwright_available:
+        _log_pw = __import__("logging").getLogger("arcanum")
+        _log_pw.info("Playwright não instalado — Agente Web IA opera em modo simulado (findings não são ingeridos como reais).")
 
     # Initialize Playbook KB (pre-seed proven techniques so the agent isn't
     # cold-starting). ensure_defaults is idempotent and additive: it tops up any
@@ -83,10 +125,36 @@ async def lifespan(app: FastAPI):
         )
         if await sandbox.ensure_image():
             app.state.sandbox = sandbox
+            try:
+                pruned = await sandbox.prune_orphans()
+                if pruned:
+                    import logging
+                    logging.getLogger("arcanum").info(f"Sandbox: {pruned} container(s) orfao(s) limpo(s) na inicializacao.")
+            except Exception:
+                pass
         else:
             app.state.sandbox = None
     except Exception:
         app.state.sandbox = None
+
+    # App-level ToolExecutor for server-side features that re-run tools outside a
+    # live agent session (notably the 1-Click Retest engine). Without this,
+    # /api/findings/{id}/retest fell back to a mock and could mark findings as
+    # REMEDIATED without actually testing them.
+    try:
+        from ..agent.tools import ToolExecutor
+        app.state.tool_executor = ToolExecutor(
+            sandbox=getattr(app.state, "sandbox", None),
+            browser=None,
+            workspace_dir=config.data_dir / "retest-workspace",
+            db=db,
+            cve_kb=cve_kb,
+            stash_mgr=app.state.stash_mgr,
+            alert_engine=app.state.alert_engine,
+            session_id=None,
+        )
+    except Exception:
+        app.state.tool_executor = None
 
     # Initialize Fast LLM client (tactical: recon, scans, tool calls)
     app.state.llm = OllamaClient(
@@ -115,16 +183,29 @@ async def lifespan(app: FastAPI):
     # Active sessions/engines
     app.state.active_engines = {}
 
-    # API access token: use configured value or generate one per process.
+    # API access token: use configured value or generate/persist one per workstation.
     import logging
     import secrets
+    from pathlib import Path
     _log = logging.getLogger("arcanum")
-    app.state.api_token = config.api_token or secrets.token_urlsafe(32)
+    token_file = Path.home() / ".arcanum" / "api_token.txt"
+    persistent_token = ""
+    if not config.api_token and token_file.exists():
+        try:
+            persistent_token = token_file.read_text(encoding="utf-8").strip()
+        except Exception:
+            pass
+    if not config.api_token and not persistent_token:
+        persistent_token = secrets.token_urlsafe(32)
+        try:
+            token_file.parent.mkdir(parents=True, exist_ok=True)
+            token_file.write_text(persistent_token, encoding="utf-8")
+        except Exception:
+            pass
+    app.state.api_token = config.api_token or persistent_token
     if not config.api_token:
-        _log.warning(
-            "ARCANUM_API_TOKEN not set — generated an ephemeral token for this "
-            "run. The bundled UI receives it automatically; external clients "
-            "use: Authorization: Bearer %s", app.state.api_token,
+        _log.info(
+            "Usando token persistente local para API/UI: Authorization: Bearer %s", app.state.api_token,
         )
 
     # Seed demo data only when explicitly requested (never silently in prod).
@@ -139,6 +220,16 @@ async def lifespan(app: FastAPI):
     yield
 
     # Cleanup
+    if hasattr(app.state, "ctem_daemon") and app.state.ctem_daemon:
+        try:
+            await app.state.ctem_daemon.stop()
+        except Exception:
+            pass
+    if hasattr(app.state, "sandbox") and app.state.sandbox:
+        try:
+            await app.state.sandbox.cleanup()
+        except Exception:
+            pass
     await db.close()
     await cve_kb.close()
     await app.state.llm.close()
@@ -180,6 +271,13 @@ def create_app() -> FastAPI:
     app.include_router(stash.router, prefix="/api/stash", tags=["stash"], dependencies=auth)
     app.include_router(cve.router, prefix="/api/cve", tags=["cve"], dependencies=auth)
     app.include_router(reports.router, prefix="/api/reports", tags=["reports"], dependencies=auth)
+    app.include_router(integrations.router, prefix="/api/integrations", tags=["integrations"], dependencies=auth)
+    app.include_router(ctem.router, prefix="/api/ctem", tags=["ctem"], dependencies=auth)
+    app.include_router(probes.router, prefix="/api/probes", tags=["probes"], dependencies=auth)
+    app.include_router(identity.router, dependencies=auth)
+    app.include_router(browser.router, dependencies=auth)
+    app.include_router(mitre.router, dependencies=auth)
+    app.include_router(eval_router.router, dependencies=auth)
     app.include_router(ws_router)
 
     # Health check
@@ -223,6 +321,7 @@ def create_app() -> FastAPI:
             },
             "stash": stash_count["cnt"] if stash_count else 0,
             "cves": cve_count,
+            "cisa_kev": await app.state.kev_engine.get_statistics() if hasattr(app.state, "kev_engine") and app.state.kev_engine else {},
         }
 
     # Playbooks endpoints

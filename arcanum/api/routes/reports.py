@@ -21,6 +21,28 @@ class GenerateReportRequest(BaseModel):
     classification: str = "CONFIDENTIAL"
 
 
+@router.get("/")
+async def list_reports():
+    """List all available generated reports across operations."""
+    config = get_config()
+    items = []
+    if config.ops_dir.exists():
+        for op_dir in sorted(config.ops_dir.iterdir()):
+            if op_dir.is_dir():
+                rep_dir = op_dir / "reports"
+                if rep_dir.is_dir():
+                    for f in sorted(rep_dir.glob("*.*")):
+                        ext = f.suffix.lstrip(".").lower()
+                        if ext in ("pdf", "html", "md", "json"):
+                            items.append({
+                                "session": op_dir.name,
+                                "name": f.name,
+                                "format": ext,
+                                "size": f.stat().st_size,
+                            })
+    return {"reports": items}
+
+
 @router.post("/generate")
 async def generate_report(request: Request, body: GenerateReportRequest):
     session = await request.app.state.session_mgr.get_session(body.session_name)
@@ -77,6 +99,10 @@ async def download_report(session_name: str, format: str):
 
     files = sorted(report_dir.glob(f"*.{format}"))
     if not files:
+        if format == "pdf":
+            html_files = sorted(report_dir.glob("*.html"))
+            if html_files:
+                return FileResponse(html_files[-1], filename=html_files[-1].name, media_type="text/html")
         raise HTTPException(404, f"No {format} report found")
 
     return FileResponse(files[-1], filename=files[-1].name)

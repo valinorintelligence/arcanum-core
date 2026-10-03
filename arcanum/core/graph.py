@@ -200,7 +200,7 @@ class GraphManager:
 
     async def edges(self, session_id: str) -> list[dict]:
         return await self.db.fetch_all(
-            "SELECT src, rel, dst FROM graph_edges WHERE session_id = ?", (session_id,))
+            "SELECT id, src, rel, dst, attrs FROM graph_edges WHERE session_id = ?", (session_id,))
 
     async def attack_paths(self, session_id: str, limit: int = 8) -> list[dict]:
         """Multi-hop traversal that chains assets into prioritized attack paths
@@ -304,3 +304,298 @@ class GraphManager:
                     "source": "graph-synthesis",
                 })
         return out
+
+    async def get_visual_graph(self, session_id: str) -> dict:
+        """Returns node and edge definitions formatted for D3.js force graphs and UI visualization."""
+        raw_nodes = await self.nodes(session_id)
+        raw_edges = await self.edges(session_id)
+
+        formatted_nodes = []
+        for n in raw_nodes:
+            raw_attrs = n.get("attrs")
+            attrs = json.loads(raw_attrs) if isinstance(raw_attrs, str) and raw_attrs.strip() else (raw_attrs or {})
+            ntype = n["type"]
+            label = n.get("label") or n.get("key") or n["id"]
+            is_sensitive = False
+            severity = attrs.get("severity")
+
+            if ntype == PORT and n["key"].split(":")[-1] in _SENSITIVE_PORTS:
+                is_sensitive = True
+                if not severity:
+                    severity = "high"
+            elif ntype == FINDING:
+                if attrs.get("severity") in ("critical", "high"):
+                    is_sensitive = True
+            elif ntype == CRED:
+                is_sensitive = True
+
+            formatted_nodes.append({
+                "id": n["id"],
+                "key": n["key"],
+                "type": ntype,
+                "label": label,
+                "attrs": attrs,
+                "severity": severity or "info",
+                "is_sensitive": is_sensitive,
+            })
+
+        formatted_edges = []
+        for e in raw_edges:
+            eid = e.get("id") or _eid(session_id, e["src"], e["rel"], e["dst"])
+            raw_attrs = e.get("attrs")
+            attrs = json.loads(raw_attrs) if isinstance(raw_attrs, str) and raw_attrs.strip() else (raw_attrs or {})
+            formatted_edges.append({
+                "id": eid,
+                "source": e["src"],
+                "target": e["dst"],
+                "rel": e["rel"],
+                "attrs": attrs,
+            })
+
+        return {
+            "session_id": session_id,
+            "nodes": formatted_nodes,
+            "edges": formatted_edges,
+            "total_nodes": len(formatted_nodes),
+            "total_edges": len(formatted_edges),
+        }
+
+    async def calculate_choke_points(self, session_id: str) -> list[dict]:
+        """Calculates critical choke points (bottlenecks) in attack paths.
+        A choke point is an asset or service whose mitigation severs the maximum number
+        of attack chains directed at high-value targets (databases, credentials, crown jewels).
+        """
+        raw_nodes = await self.nodes(session_id)
+        if not raw_nodes:
+            return []
+
+        nodes_by_id = {n["id"]: n for n in raw_nodes}
+        raw_edges = await self.edges(session_id)
+
+        # Adjacency
+        out_adj: dict[str, list[tuple[str, str]]] = {}
+        in_adj: dict[str, list[tuple[str, str]]] = {}
+        for e in raw_edges:
+            out_adj.setdefault(e["src"], []).append((e["rel"], e["dst"]))
+            in_adj.setdefault(e["dst"], []).append((e["rel"], e["src"]))
+
+        # Identify Crown Jewels (high-value targets)
+        crown_jewels = set()
+        for nid, n in nodes_by_id.items():
+            ntype = n["type"]
+            raw_attrs = n.get("attrs")
+            attrs = json.loads(raw_attrs) if isinstance(raw_attrs, str) and raw_attrs.strip() else (raw_attrs or {})
+            if ntype == PORT and n["key"].split(":")[-1] in _SENSITIVE_PORTS:
+                crown_jewels.add(nid)
+            elif ntype == SERVICE and any(n["key"].split(":")[-2] in _SENSITIVE_PORTS for _ in [1] if len(n["key"].split(":")) >= 3):
+                crown_jewels.add(nid)
+            elif ntype == FINDING and attrs.get("severity") in ("critical", "high"):
+                crown_jewels.add(nid)
+            elif ntype == CRED:
+                crown_jewels.add(nid)
+
+        if not crown_jewels:
+            for nid, n in nodes_by_id.items():
+                if n["type"] in (SERVICE, FINDING):
+                    crown_jewels.add(nid)
+
+        # Identify Entry Points (external hosts, endpoints, initial footholds)
+        entry_points = set()
+        for nid, n in nodes_by_id.items():
+            if n["type"] in (HOST, ENDPOINT):
+                entry_points.add(nid)
+
+        if not entry_points:
+            entry_points = set(nodes_by_id.keys()) - crown_jewels
+
+        # Trace simple paths from entry points to crown jewels (depth <= 6)
+        all_paths: list[list[str]] = []
+        for entry in entry_points:
+            queue = [[entry]]
+            while queue and len(all_paths) < 100:
+                path = queue.pop(0)
+                curr = path[-1]
+                if len(path) > 6:
+                    continue
+                if curr in crown_jewels and len(path) > 1:
+                    all_paths.append(path)
+                    continue
+
+                for rel, nxt in out_adj.get(curr, []):
+                    if nxt not in path and nxt in nodes_by_id:
+                        queue.append(path + [nxt])
+
+        if not all_paths:
+            degree_map = {}
+            for nid in nodes_by_id:
+                deg = len(out_adj.get(nid, [])) + len(in_adj.get(nid, []))
+                if deg > 1:
+                    degree_map[nid] = deg
+            choke_candidates = sorted(degree_map.items(), key=lambda x: x[1], reverse=True)[:5]
+            results = []
+            for nid, deg in choke_candidates:
+                n = nodes_by_id[nid]
+                results.append({
+                    "node_id": nid,
+                    "label": n.get("label") or n.get("key"),
+                    "type": n["type"],
+                    "paths_severed": deg,
+                    "impact_percentage": 100.0,
+                    "severity": "high",
+                    "recommendation": f"Ponto de convergência no ativo '{n.get('label')}'. Aplicar isolamento perimetral.",
+                })
+            return results
+
+        # Count intermediary nodes across all paths
+        node_sever_counts: dict[str, int] = {}
+        for path in all_paths:
+            sub_nodes = set(path[1:-1]) if len(path) > 2 else set(path)
+            for nid in sub_nodes:
+                node_sever_counts[nid] = node_sever_counts.get(nid, 0) + 1
+
+        total_paths = len(all_paths)
+        sorted_chokes = sorted(node_sever_counts.items(), key=lambda x: x[1], reverse=True)
+
+        choke_points = []
+        for nid, count in sorted_chokes[:6]:
+            n = nodes_by_id[nid]
+            pct = round((count / total_paths) * 100, 1)
+            ntype = n["type"]
+            label = n.get("label") or n.get("key")
+            
+            if pct >= 70:
+                sev = "critical"
+            elif pct >= 40:
+                sev = "high"
+            else:
+                sev = "medium"
+
+            rec = f"Mitigar ou isolar '{label}' ({ntype}) corta {pct}% dos caminhos de invasão identificados ({count}/{total_paths})."
+            if ntype == PORT:
+                rec += " Recomenda-se fechar a porta no firewall perimetral ou exigir VPN corporativa."
+            elif ntype == HOST:
+                rec += " Recomenda-se aplicar microsegmentação de rede (Zero Trust)."
+            elif ntype == CRED:
+                rec += " Recomenda-se revogar a credencial imediatamente e ativar MFA."
+
+            choke_points.append({
+                "node_id": nid,
+                "label": label,
+                "type": ntype,
+                "paths_severed": count,
+                "impact_percentage": pct,
+                "severity": sev,
+                "recommendation": rec,
+            })
+
+        return choke_points
+
+    async def simulate_blast_radius(self, session_id: str, origin_node_id: str, max_depth: int = 4) -> dict:
+        """Simulates lateral movement and compromise propagation from origin_node_id.
+        Explores reachable assets, credentials, databases and flags crown jewels at risk.
+        """
+        raw_nodes = await self.nodes(session_id)
+        nodes_by_id = {n["id"]: n for n in raw_nodes}
+        if origin_node_id not in nodes_by_id:
+            return {"error": f"Nó de origem '{origin_node_id}' não encontrado no grafo da sessão."}
+
+        raw_edges = await self.edges(session_id)
+        # Bidirectional graph for lateral movement analysis
+        adj: dict[str, list[tuple[str, str, str]]] = {}
+        for e in raw_edges:
+            src, dst, rel = e["src"], e["dst"], e["rel"]
+            adj.setdefault(src, []).append((dst, rel, "forward"))
+            adj.setdefault(dst, []).append((src, rel, "reverse"))
+
+        visited = {origin_node_id: 0}
+        queue = [(origin_node_id, 0)]
+        hops_detail = []
+        affected_nodes = [origin_node_id]
+
+        while queue:
+            curr_id, depth = queue.pop(0)
+            if depth >= max_depth:
+                continue
+
+            for neighbor_id, rel, direction in adj.get(curr_id, []):
+                if neighbor_id not in visited and neighbor_id in nodes_by_id:
+                    visited[neighbor_id] = depth + 1
+                    queue.append((neighbor_id, depth + 1))
+                    affected_nodes.append(neighbor_id)
+                    nb_node = nodes_by_id[neighbor_id]
+                    hops_detail.append({
+                        "hop": depth + 1,
+                        "node_id": neighbor_id,
+                        "label": nb_node.get("label") or nb_node.get("key"),
+                        "type": nb_node["type"],
+                        "direction": direction,
+                        "relation": rel,
+                    })
+
+        # Categorize affected assets
+        affected_hosts = []
+        affected_services = []
+        affected_creds = []
+        crown_jewels_at_risk = []
+
+        for nid in affected_nodes:
+            n = nodes_by_id[nid]
+            ntype = n["type"]
+            label = n.get("label") or n.get("key")
+            raw_attrs = n.get("attrs")
+            attrs = json.loads(raw_attrs) if isinstance(raw_attrs, str) and raw_attrs.strip() else (raw_attrs or {})
+
+            if ntype == HOST:
+                affected_hosts.append(label)
+            elif ntype == SERVICE:
+                affected_services.append(label)
+            elif ntype == CRED:
+                affected_creds.append(label)
+
+            # Crown jewels
+            if ntype == PORT and n["key"].split(":")[-1] in _SENSITIVE_PORTS:
+                crown_jewels_at_risk.append(f"{label} ({_SENSITIVE_PORTS[n['key'].split(':')[-1]]})")
+            elif ntype == FINDING and attrs.get("severity") in ("critical", "high"):
+                crown_jewels_at_risk.append(f"Vulnerabilidade: {label} [{attrs.get('severity')}]")
+            elif ntype == CRED:
+                crown_jewels_at_risk.append(f"Credencial: {label}")
+
+        base_score = (len(affected_hosts) * 20) + (len(affected_creds) * 25) + (len(crown_jewels_at_risk) * 35) + (len(affected_services) * 8)
+        blast_score = min(100, max(15, base_score))
+
+        if blast_score >= 80 or len(crown_jewels_at_risk) > 0:
+            risk_level = "CRITICAL"
+        elif blast_score >= 50:
+            risk_level = "HIGH"
+        elif blast_score >= 25:
+            risk_level = "MEDIUM"
+        else:
+            risk_level = "LOW"
+
+        origin_node = nodes_by_id[origin_node_id]
+        origin_label = origin_node.get("label") or origin_node.get("key")
+
+        containment = (
+            f"Contenção Prioritária para '{origin_label}': Isolar o host afetado da VLAN interna, "
+            f"revogar credenciais associadas e bloquear comunicações com os seguintes ativos de alto risco: "
+            f"{', '.join(crown_jewels_at_risk[:3]) if crown_jewels_at_risk else 'serviços adjacentes'}."
+        )
+
+        return {
+            "origin": {
+                "id": origin_node_id,
+                "label": origin_label,
+                "type": origin_node["type"],
+            },
+            "blast_score": blast_score,
+            "risk_level": risk_level,
+            "total_reachable_nodes": len(affected_nodes),
+            "hops_depth_simulated": max(visited.values()) if visited else 0,
+            "affected_hosts": list(set(affected_hosts)),
+            "affected_services": list(set(affected_services)),
+            "affected_credentials": list(set(affected_creds)),
+            "crown_jewels_at_risk": list(set(crown_jewels_at_risk)),
+            "hops": hops_detail,
+            "containment_strategy": containment,
+        }
+

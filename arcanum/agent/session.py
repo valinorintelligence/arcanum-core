@@ -10,6 +10,7 @@ from typing import Any
 
 
 import re
+import unicodedata
 
 _SESSION_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
@@ -19,7 +20,7 @@ def validate_session_name(name: str) -> str:
     component under ops_dir, so ``..`` / slashes / absolute paths are rejected
     (validated as directory traversal before this guard)."""
     name = (name or "").strip()
-    if not _SESSION_NAME_RE.match(name) or name in (".", ".."):
+    if not name or not _SESSION_NAME_RE.match(name) or name in (".", "..") or len(name) > 64:
         raise ValueError(
             "Invalid session name: use 1-64 chars of letters, digits, '.', '_' or '-'"
         )

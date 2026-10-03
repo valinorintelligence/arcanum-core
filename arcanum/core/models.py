@@ -95,6 +95,14 @@ class Session(BaseModel):
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
 
+class FindingStatus(str, Enum):
+    discovered = "discovered"
+    confirmed = "confirmed"
+    verifying = "verifying"
+    remediated = "remediated"
+    regressed = "regressed"
+
+
 class Finding(BaseModel):
     """A security finding / vulnerability."""
 
@@ -103,6 +111,7 @@ class Finding(BaseModel):
     title: str
     type: Optional[str] = None
     severity: Optional[Severity] = None
+    status: FindingStatus = FindingStatus.confirmed
     cvss_score: Optional[float] = None
     cvss_vector: Optional[str] = None
     affected: list[str] = Field(default_factory=list)
@@ -112,6 +121,10 @@ class Finding(BaseModel):
     cwe_ids: list[str] = Field(default_factory=list)
     remediation: Optional[str] = None
     verified: bool = False
+    retest_tool: Optional[str] = None
+    retest_arguments: Optional[dict] = None
+    retested_at: Optional[datetime] = None
+    retest_proof: Optional[dict] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 

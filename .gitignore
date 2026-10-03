@@ -45,3 +45,8 @@ coverage.xml
 # Workspace data
 .arcanum/
 workspace/
+
+# Scratch/test artifacts
+tmp/
+test_ws/
+test_db.sqlite

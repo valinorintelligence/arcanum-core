@@ -312,15 +312,45 @@ class ReportEngine:
         }, indent=2)
 
     def generate_pdf(self, session: dict, findings: list[dict], output_path: Path, config: ReportConfig = None) -> Path:
-        """Generate PDF report using WeasyPrint."""
+        """Generate PDF report using WeasyPrint, headless Edge/Chrome, or HTML print fallback."""
         html_content = self.generate_html(session, findings, config)
+        # 1. Try WeasyPrint if available
         try:
             from weasyprint import HTML
             HTML(string=html_content).write_pdf(str(output_path))
-        except ImportError:
-            # Fallback: save as HTML if WeasyPrint not available
-            output_path = output_path.with_suffix(".html")
-            output_path.write_text(html_content)
+            if output_path.exists() and output_path.stat().st_size > 0:
+                return output_path
+        except Exception:
+            pass
+
+        # 2. Try headless Edge or Chrome (standard on Windows and Linux)
+        import shutil, subprocess
+        edge_paths = [
+            Path(r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"),
+            Path(r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"),
+        ]
+        browser_bin = next((str(p) for p in edge_paths if p.exists()), None)
+        if not browser_bin:
+            browser_bin = shutil.which("msedge") or shutil.which("google-chrome") or shutil.which("chrome") or shutil.which("chromium")
+
+        if browser_bin:
+            try:
+                temp_html = output_path.with_suffix(".tmp.html")
+                temp_html.write_text(html_content, encoding="utf-8")
+                subprocess.run(
+                    [browser_bin, "--headless", "--disable-gpu", f"--print-to-pdf={output_path.resolve()}", str(temp_html.resolve())],
+                    timeout=15, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                )
+                temp_html.unlink(missing_ok=True)
+                if output_path.exists() and output_path.stat().st_size > 0:
+                    return output_path
+            except Exception:
+                pass
+
+        # 3. Fallback: save as .html alongside and write HTML to output_path
+        html_fallback = output_path.with_suffix(".html")
+        html_fallback.write_text(html_content, encoding="utf-8")
+        output_path.write_text(html_content, encoding="utf-8")
         return output_path
 
     async def export(self, session: dict, findings: list[dict], output_dir: Path,
@@ -334,17 +364,17 @@ class ReportEngine:
 
         if "html" in formats:
             path = output_dir / f"{base_name}.html"
-            path.write_text(self.generate_html(session, findings, config))
+            path.write_text(self.generate_html(session, findings, config), encoding="utf-8")
             results["html"] = path
 
         if "md" in formats:
             path = output_dir / f"{base_name}.md"
-            path.write_text(self.generate_markdown(session, findings, config))
+            path.write_text(self.generate_markdown(session, findings, config), encoding="utf-8")
             results["md"] = path
 
         if "json" in formats:
             path = output_dir / f"{base_name}.json"
-            path.write_text(self.generate_json(session, findings, config))
+            path.write_text(self.generate_json(session, findings, config), encoding="utf-8")
             results["json"] = path
 
         if "pdf" in formats:
