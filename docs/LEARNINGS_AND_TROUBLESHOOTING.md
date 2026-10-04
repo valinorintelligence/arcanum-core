@@ -54,3 +54,42 @@ Para transformar diagnósticos do Arcanum em auditorias vendáveis para donos de
   1. *O Fato:* "Identifiquei que sua aplicação expõe os logins administrativos na API pública e não restringe enquadramento em outros domínios."
   2. *O Impacto:* "Criminosos podem clonar sua interface de pagamento via iframe ou direcionar ataques de credencial sabendo exatamente o usuário administrador."
   3. *A Solução:* "Gerei um relatório técnico preventivo com o plano de remediação e posso aplicar a correção em poucas horas."
+
+---
+
+## 4. Post-Mortem: Lentidão extrema da máquina (freeze → reboot)
+
+### Sintoma
+Durante o uso do Arcanum o laptop (Ryzen 7 4800H, **GTX 1650 4GB**, 64GB RAM) ficou muito lento,
+exigindo reinicialização do PC.
+
+### Causas-raízes (confirmadas por análise de logs)
+Os logs do servidor **não** mostraram bug de runaway — sem tracebacks, **sem polling** no frontend
+(os `/api/stats` eram navegação manual) e a reconexão WebSocket é limitada (3 tentativas → reload). A
+lentidão é de **recursos**, não de um laço infinito:
+1. **CPU saturada pelo modelo 7B.** O `qwen2.5-coder:7b` carrega ~**42% GPU / 58% CPU** (não cabe nos
+   4GB de VRAM). Cada turno faz *prefill* na CPU, saturando os 8 núcleos por dezenas de segundos — o
+   SO/UI ficam sem fôlego. Agravado por *prompts* grandes (ver BUG Perf; o system prompt foi reduzido
+   de 6.951→~1.600 tokens, baixando o prefill de ~110s→~49s).
+2. **Acúmulo de processos.** Reinícios do servidor deixaram processos `arcanum serve` órfãos presos à
+   porta 8000 (comprovado por `Errno 10048` em `bklqr6l68.output`). Cada processo mantinha uma conexão
+   Ollama e um loop do CTEM daemon.
+3. **`keep_alive: -1`.** O cliente Ollama fixava o modelo na VRAM/RAM **para sempre** (~2.2GB VRAM +
+   ~3.2GB RAM), mesmo ocioso.
+4. **Docker Desktop (WSL2).** O `vmmem`/`vmmemWSL` do Docker é pesado no Windows mesmo sem containers.
+
+### Correções e mitigações
+- **Código:** `keep_alive` agora é configurável (`ARCANUM_OLLAMA_KEEP_ALIVE`, padrão **"30m"**) — libera
+  VRAM/RAM quando o Arcanum fica ocioso. System prompt enxuto (já aplicado). Lock por sessão + abort de
+  runs órfãos no disconnect (já aplicados).
+- **Ambiente (aplicar e reiniciar o Ollama):**
+  - `OLLAMA_NUM_THREAD=6` (deixa 2 núcleos para o SO/UI durante a inferência — mantém o laptop usável).
+  - `OLLAMA_FLASH_ATTENTION=1` e `OLLAMA_KV_CACHE_TYPE=q8_0` (metade da memória do KV cache; cabe mais
+    contexto nos 4GB).
+- **Operacional:**
+  - Rodar **UM** `arcanum serve` por vez. Antes de reiniciar, matar o processo anterior na porta 8000
+    (`Get-NetTCPConnection -LocalPort 8000` → `Stop-Process`).
+  - Evitar **operações simultâneas** (duas sessões rodando o agente ao mesmo tempo saturam o Ollama;
+    `OLLAMA_NUM_PARALLEL=1` serializa, mas o ideal é uma por vez neste hardware).
+  - Ligar o **Docker Desktop apenas** quando for usar a ferramenta `execute` (recon real via Kali);
+    as ~116 ferramentas `audit_*` nativas não precisam de Docker.

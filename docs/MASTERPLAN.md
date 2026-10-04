@@ -209,3 +209,13 @@ A cada nova descoberta ou correção:
   - Testes: **385 passam**.
   - **Pendente P2:** demais `except...pass` (restam ~120), decisão sobre `skills.py`, flash-attention +
     `OLLAMA_KV_CACHE_TYPE=q8_0` (mudança de ambiente/Ollama — requer confirmação), e **L** (TUI).
+- **2026-10-04 — Investigação de lentidão (freeze → reboot do PC):**
+  - Logs analisados (b0z5mxue1/bklqr6l68/b43xosm60/bvhxzh3xt): **sem** bug de runaway — sem tracebacks,
+    sem polling no frontend, reconexão WS limitada. Causa = **recursos**: CPU saturada pelo 7B (58% CPU),
+    processos `arcanum serve` órfãos (conflito na porta 8000), `keep_alive:-1` fixando o modelo, Docker WSL.
+  - **Fix de código:** `keep_alive` configurável (`ARCANUM_OLLAMA_KEEP_ALIVE`, padrão "30m") — libera
+    VRAM/RAM quando ocioso ([config.py], [llm.py], [main.py]). Post-mortem completo em
+    `docs/LEARNINGS_AND_TROUBLESHOOTING.md` §4.
+  - **Recomendações de ambiente (usuário aplica + reinicia Ollama):** `OLLAMA_NUM_THREAD=6` (deixa
+    núcleos para o SO), `OLLAMA_FLASH_ATTENTION=1`, `OLLAMA_KV_CACHE_TYPE=q8_0`. Rodar 1 server por vez;
+    Docker só ao usar `execute`. **385 testes verdes.**

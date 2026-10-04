@@ -71,6 +71,12 @@ class ArcanumConfig(BaseSettings):
     ollama_num_predict: int = 256
     ollama_enable_thinking: bool = False
     ollama_repeat_penalty: float = 1.05
+    # How long Ollama keeps the model resident after the last request. "-1" pins
+    # it forever (lowest latency, but holds ~2.2GB VRAM + ~3.2GB RAM on a 4GB-GPU
+    # laptop even when idle). A finite value like "30m"/"10m" frees those
+    # resources when Arcanum is idle so the machine stays responsive for other
+    # work; the model reloads (a few seconds) on next use.
+    ollama_keep_alive: str = "30m"
     # Embedding model for semantic retrieval (RAG). Pull with:
     #   ollama pull nomic-embed-text
     # If unavailable, recall gracefully falls back to keyword (FTS) search.

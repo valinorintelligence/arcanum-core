@@ -175,6 +175,7 @@ async def lifespan(app: FastAPI):
         num_predict=config.ollama_fast_predict,
         repeat_penalty=config.ollama_repeat_penalty,
         enable_thinking=config.ollama_enable_thinking,
+        keep_alive=config.ollama_keep_alive,
     )
 
     # Initialize Deep LLM client (strategic: exploit planning, reports, reflection)
@@ -187,6 +188,7 @@ async def lifespan(app: FastAPI):
         num_predict=config.ollama_deep_predict,
         repeat_penalty=config.ollama_repeat_penalty,
         enable_thinking=config.ollama_enable_thinking,
+        keep_alive=config.ollama_keep_alive,
     )
 
     # Active sessions/engines
