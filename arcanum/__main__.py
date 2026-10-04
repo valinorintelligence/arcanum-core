@@ -495,6 +495,20 @@ def demo_seed_cmd():
 def serve(port: int, host: str):
     """Start the web UI server."""
     import uvicorn
+    import logging
+    from .core.config import get_config
+
+    # Configure the 'arcanum' logger so its diagnostic output is actually visible.
+    # Without a handler, every logging.getLogger("arcanum") call (sandbox missing,
+    # Playwright simulated mode, RAG unavailable, CTEM, etc.) was silently dropped.
+    _level = getattr(logging, str(get_config().log_level).upper(), logging.INFO)
+    _alog = logging.getLogger("arcanum")
+    if not _alog.handlers:
+        _h = logging.StreamHandler()
+        _h.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] arcanum: %(message)s", "%H:%M:%S"))
+        _alog.addHandler(_h)
+    _alog.setLevel(_level)
+    _alog.propagate = False
 
     if host not in ("127.0.0.1", "localhost", "::1"):
         click.echo(

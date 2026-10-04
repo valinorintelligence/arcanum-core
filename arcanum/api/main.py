@@ -113,8 +113,10 @@ async def lifespan(app: FastAPI):
         if indexed:
             import logging
             logging.getLogger("arcanum").info(f"RAG: {indexed} playbook(s) indexado(s) semanticamente.")
-    except Exception:
-        pass
+    except Exception as exc:
+        import logging
+        logging.getLogger("arcanum").warning(
+            "RAG indisponivel (recall cai para busca por keyword): %s", exc)
 
     # Initialize Docker Sandbox
     try:
@@ -134,8 +136,15 @@ async def lifespan(app: FastAPI):
                 pass
         else:
             app.state.sandbox = None
-    except Exception:
+            import logging
+            logging.getLogger("arcanum").warning(
+                "Imagem do sandbox '%s' nao encontrada — a ferramenta 'execute' (nmap/nuclei/httpx) "
+                "ficara indisponivel. Rode: arcanum sandbox build", config.sandbox_image)
+    except Exception as exc:
         app.state.sandbox = None
+        import logging
+        logging.getLogger("arcanum").warning(
+            "Falha ao inicializar o sandbox Docker — 'execute' indisponivel: %s", exc)
 
     # App-level ToolExecutor for server-side features that re-run tools outside a
     # live agent session (notably the 1-Click Retest engine). Without this,

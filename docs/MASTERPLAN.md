@@ -91,7 +91,7 @@ Ryzen 7 4800H (8C/16T) · **GTX 1650 Mobile — 4GB VRAM** · 63GB RAM · Ollama
 | **L** | TUI stub: `_engine` nunca conectado; actions placeholder; `_handle_event` lê campos errados | [cli/app.py:141] | conectar engine ou marcar TUI como experimental |
 | **WordPress falso** | `_detect_tech_keywords` varre últimas 6 msgs; a `system` (cita wordpress/plugins) entra nelas → falso-positivo em toda sessão | [engine.py:848] | exigir sinais fortes (wp-content/wp-json/?author=); não varrer a `system` |
 
-### 🟡 P2 — Qualidade / robustez
+### 🟡 P2 — Qualidade / robustez — ⏳ EM ANDAMENTO (2026-10-03)
 - **123 blocos `except...pass`** (falhas silenciosas — dificultam diagnóstico).
 - **Código morto:** `arcanum/agent/orchestrator.py` e `arcanum/agent/skills.py` (nunca importados).
 - `app.state.browser` nunca setado → ferramenta `browser_action` morta (headless usa `_browser_agent` lazy).
@@ -194,3 +194,18 @@ A cada nova descoberta ou correção:
   - Testes: **385 passam**. **Adiado:** L (TUI stub) — Web UI é o produto; TUI marcada como experimental.
   - **Próximo:** Lote P2 (reduzir `except...pass`, remover/ reconectar código morto, flash-attention/KV q8,
     atualizar README, **commitar** o trabalho).
+- **2026-10-03 — P0+P1 commitados** (branch `fix/arcanum-hardening`): `86e8749` (código) e `dd94ba4`
+  (docs). `tmp/`, `test_ws/`, `test_db.sqlite` adicionados ao `.gitignore`.
+- **2026-10-03 — Lote P2 (parcial) ✅:**
+  - **Logging visível:** adicionado handler ao logger `arcanum` no comando `serve` ([__main__.py]) — antes
+    TODO log do logger era descartado (sem handler). Agora avisos de diagnóstico aparecem. Validado ao
+    vivo: "CTEM Daemon background worker started." (também confirma o fix I em runtime).
+  - **Falhas silenciosas:** `except` do sandbox e do RAG no lifespan ([api/main.py]) agora logam WARNING
+    com a causa (sandbox ausente ⇒ avisa que 'execute' fica indisponível).
+  - **Código morto:** removido `arcanum/agent/orchestrator.py` (nunca importado). `skills.py` (57 skills)
+    mantido mas documentado como NÃO conectado (decisão: remover vs reconectar ao agente).
+  - **README:** corrigido modelo/`num_ctx` reais (7B, hybrid tier) + ponteiro para AGENTS.md/MASTERPLAN
+    + nota sobre os módulos enterprise.
+  - Testes: **385 passam**.
+  - **Pendente P2:** demais `except...pass` (restam ~120), decisão sobre `skills.py`, flash-attention +
+    `OLLAMA_KV_CACHE_TYPE=q8_0` (mudança de ambiente/Ollama — requer confirmação), e **L** (TUI).
