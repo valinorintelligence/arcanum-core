@@ -325,3 +325,51 @@ class PlaybookManager:
             )
             added += 1
         return added
+
+    async def ensure_skill_playbooks(self) -> int:
+        """Seed the built-in Skill library (arcanum/agent/skills.py) into the
+        playbook KB so its 57 curated methodologies are reachable via semantic
+        recall (RAG/FTS) — WITHOUT bloating the system prompt. Idempotent: skips
+        skills already present (matched by technology=category + technique=name).
+
+        This is how the Skill library is 'wired' into the agent: instead of the
+        unused SkillRouter injecting steps into the prompt, the skills become
+        recall entries that the engine surfaces only when the context matches.
+        """
+        try:
+            from ..agent.skills import BUILTIN_SKILLS
+        except Exception:
+            return 0
+        now = datetime.now(timezone.utc).isoformat()
+        added = 0
+        for sk in BUILTIN_SKILLS:
+            technology = (getattr(sk, "category", "") or "general").strip().lower()
+            technique = (getattr(sk, "name", "") or "").strip()
+            if not technique:
+                continue
+            existing = await self.db.fetch_one(
+                "SELECT id FROM playbooks WHERE LOWER(technology)=LOWER(?) AND LOWER(technique)=LOWER(?)",
+                (technology, technique),
+            )
+            if existing:
+                continue
+            steps = getattr(sk, "steps", []) or []
+            commands = "\n".join(s for s in steps if s).strip()
+            kws = ", ".join(getattr(sk, "keywords", []) or [])
+            tools = ", ".join(getattr(sk, "tools", []) or [])
+            desc = (getattr(sk, "description", "") or "").strip()
+            risk = getattr(sk, "risk_level", "medium")
+            notes = f"{desc}".strip()
+            if kws:
+                notes = f"[Trigger: {kws}] {notes}".strip()
+            if tools:
+                notes = f"{notes} [Tools: {tools}]".strip()
+            notes = f"{notes} [Risk: {risk}] [Fonte: skill library]".strip()
+            playbook_id = f"pb-{uuid.uuid4().hex[:8]}"
+            await self.db.execute(
+                """INSERT INTO playbooks (id, technology, technique, commands, notes, success_count, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, 1, ?, ?)""",
+                (playbook_id, technology, technique, commands, notes, now, now),
+            )
+            added += 1
+        return added

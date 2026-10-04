@@ -99,6 +99,17 @@ async def lifespan(app: FastAPI):
             logging.getLogger("arcanum").info(f"Playbooks: {added} técnica(s) padrão adicionada(s).")
     except Exception:
         pass
+    # Seed the built-in Skill library (57 skills) into the playbook KB so it is
+    # reachable via semantic recall (RAG/FTS) instead of sitting unused — done
+    # before the RAG indexing below so the skills get embedded too.
+    try:
+        skill_added = await pm.ensure_skill_playbooks()
+        if skill_added:
+            import logging
+            logging.getLogger("arcanum").info(f"Skills: {skill_added} playbook(s) da biblioteca de skills adicionado(s) ao recall.")
+    except Exception as exc:
+        import logging
+        logging.getLogger("arcanum").warning("Falha ao semear skills no recall: %s", exc)
     app.state.playbook_mgr = pm
 
     # Semantic index (RAG): embed playbooks so the agent recalls techniques by
