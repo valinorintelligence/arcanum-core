@@ -245,3 +245,13 @@ A cada nova descoberta ou correção:
     - **`except...pass` (~120):** os críticos do lifespan agora logam; o restante são best-effort por
       checagem (fallback gracioso) — deixados como estão.
   - **Estado:** P0 ✅, P1 ✅ (exceto L), P2 ✅ (valor) — 385 testes verdes em todos os passos.
+- **2024-10-04 — Skills wired + TUI honesta (feature work aprovado):**
+  - **Skills (57) conectadas via recall:** `PlaybookManager.ensure_skill_playbooks()` semeia as 57
+    skills de `agent/skills.py` no KB de playbooks (idempotente), e o lifespan as indexa no RAG. Assim
+    são usadas via **recall semântico** quando o contexto casa — **sem inflar o prompt** (commit 79b50be).
+    Validado: 57 semeadas, idempotente, recall "subdomain"→subdomain_enum. Decisão anterior (manter
+    `skills.py` como superseded) **substituída por: wired via recall**.
+  - **TUI honesta:** `arcanum autopilot/copilot/manual` agora avisa claramente que a TUI é experimental
+    e direciona ao Web UI (removida a mensagem enganosa "Would process"). Build completo da TUI segue
+    como trabalho futuro (não validável neste ambiente headless; exige teste interativo do usuário).
+  - 385 testes verdes.

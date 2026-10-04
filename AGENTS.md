@@ -83,7 +83,9 @@
 - **Hardening a preservar:** `_handle_execute` recusa rodar sem sandbox (sem RCE no host); escopo é
   verificado de forma determinística; reports usam autoescape anti-XSS; API/WS exigem token.
 
-### Pendências conhecidas (ver MASTERPLAN §4)
-P1: Eval UI (contrato), CTEM `.start()`, Playwright/simulado, status running/complete, lock de
-concorrência, sínteses no `deep_llm`, TUI stub, fingerprint "WordPress" falso. P2: `except...pass`,
-código morto (`orchestrator.py`, `skills.py`), docs, commit do trabalho pendente.
+### Estado (ver MASTERPLAN §9)
+P0 ✅, P1 ✅ (exceto TUI), P2 ✅ (valor). Lentidão/freeze: mitigado (flash-attn+KV q8 no Ollama,
+`keep_alive=30m`, `num_thread` auto deixando ~2 núcleos livres). `orchestrator.py` removido.
+**Skills:** as 57 skills de `agent/skills.py` agora são **semeadas no PlaybookManager**
+(`ensure_skill_playbooks`) e usadas via **recall semântico (RAG/FTS)** — não injetadas no prompt.
+**TUI:** ainda é stub experimental — o **Web UI é o produto** (a TUI não conecta o engine).
