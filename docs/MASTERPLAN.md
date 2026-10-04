@@ -255,3 +255,17 @@ A cada nova descoberta ou correção:
     e direciona ao Web UI (removida a mensagem enganosa "Would process"). Build completo da TUI segue
     como trabalho futuro (não validável neste ambiente headless; exige teste interativo do usuário).
   - 385 testes verdes.
+- **2026-10-04 — Passe de excelência (testes de regressão + hardening + validação integrada):**
+  - **Testes de regressão** (`tests/test_core/test_audit_fix_regressions.py`, 9 testes): blindam BUG N
+    (auto-ingest desembrulha output + ignora simulados), BUG K (retest nunca remedia sem prova),
+    `effective_num_thread` (folga de CPU) e seeding das 57 skills. Suíte: **394 testes**.
+  - **Refactor WS** (`_drive_agent_stream`): status `running<->complete` + lock por sessão agora em
+    TODOS os caminhos (chat-run E aprovação copilot/manual), que antes ficavam presos em "running".
+  - **Sínteses**: `num_predict` 900→600 (resumo completo, conclusão mais rápida no 7B lento).
+  - **VALIDAÇÃO INTEGRADA AO VIVO** (tudo ligado — flash-attn/q8/6-threads/keep_alive/skills/fixes):
+    audit em example.com → **1ª ferramenta 22s** (era ~110s), **3 findings criados+persistidos**,
+    status **created→complete**, **resumo completo (2114 chars)**, run completo em ~136s. Pipeline
+    ponta-a-ponta confirmado.
+  - **Estado final:** P0 ✅ · P1 ✅ (TUI = stub honesto documentado) · P2 ✅ · Lentidão ✅ · Skills ✅.
+    ~14 commits (86e8749→c85bb2d). Backlog opcional: build completo da TUI (precisa teste interativo),
+    sweep dos ~120 `except...pass` (baixo valor).
