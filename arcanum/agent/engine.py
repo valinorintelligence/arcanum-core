@@ -259,7 +259,7 @@ class AgentEngine:
                         messages=self.messages,
                         tools=None,
                         fmt=None,
-                        num_predict=900,
+                        num_predict=600,
                     )
                     content = response_msg.get("content", "")
                     raw_thinking = response_msg.get("thinking", "")
@@ -288,7 +288,7 @@ class AgentEngine:
                         messages=self.messages,
                         tools=None,
                         fmt=None,
-                        num_predict=900,
+                        num_predict=600,
                     )
                     content = response_msg.get("content", "")
                     raw_thinking = response_msg.get("thinking", "")
@@ -501,7 +501,7 @@ class AgentEngine:
                                     messages=self.messages,
                                     tools=None,
                                     fmt=None,
-                                    num_predict=900,
+                                    num_predict=600,
                                 )
                                 content = response_msg.get("content", "")
                                 extracted_thinking, clean_content = self._extract_thinking(content)
