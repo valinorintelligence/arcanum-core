@@ -77,11 +77,13 @@ class ArcanumConfig(BaseSettings):
     # resources when Arcanum is idle so the machine stays responsive for other
     # work; the model reloads (a few seconds) on next use.
     ollama_keep_alive: str = "30m"
-    # CPU threads for inference. 0 = let Ollama auto-detect (uses all physical
-    # cores, which saturates the machine). On a laptop, set this below the core
-    # count (e.g. 6 of 8) to leave headroom for the OS/UI so it stays responsive
-    # during inference. NOTE: the OLLAMA_NUM_THREAD *server* env var is ignored by
-    # Ollama — thread count must be passed as a per-request option, which this does.
+    # CPU threads for inference (passed as the per-request `num_thread` option —
+    # the OLLAMA_NUM_THREAD *server* env is ignored by Ollama).
+    #   0  (default) = AUTO: leave ~2 physical cores free for the OS/UI so the
+    #                  machine stays responsive during inference (laptop-friendly).
+    #   -1           = use all cores (max speed; can make a laptop unresponsive).
+    #   N  (>0)      = use exactly N threads.
+    # Resolve the effective value with effective_num_thread().
     ollama_num_thread: int = 0
     # Embedding model for semantic retrieval (RAG). Pull with:
     #   ollama pull nomic-embed-text
@@ -163,6 +165,32 @@ class ArcanumConfig(BaseSettings):
     @property
     def workflows_dir(self) -> Path:
         return self.data_dir / "workflows"
+
+    def effective_num_thread(self) -> int:
+        """Resolve the CPU thread count to pass to Ollama (see ollama_num_thread).
+
+        Returns 0 to mean "don't cap" (Ollama uses all cores); a positive value
+        caps the threads. Default (config value 0) leaves ~2 physical cores free
+        so the machine stays responsive during local inference.
+        """
+        n = self.ollama_num_thread
+        if n and n > 0:
+            return n
+        if n == -1:
+            return 0  # explicit: use all cores
+        phys = None
+        try:
+            import psutil
+            phys = psutil.cpu_count(logical=False)
+        except Exception:
+            phys = None
+        if not phys:
+            # psutil missing: estimate physical cores from logical (assume 2-way
+            # SMT, true for modern Intel/AMD). os.cpu_count() is always available.
+            import os
+            logical = os.cpu_count() or 4
+            phys = max(1, logical // 2)
+        return max(1, phys - 2)
 
     def model_post_init(self, __context) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)

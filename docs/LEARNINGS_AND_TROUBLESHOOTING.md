@@ -88,8 +88,10 @@ lentidão é de **recursos**, não de um laço infinito:
     --cache-type-k q8_0 --cache-type-v q8_0`.
   - **Threads da CPU:** o env `OLLAMA_NUM_THREAD` é **ignorado** pelo Ollama (não repassa ao
     llama-server — verificado: `n_threads=8` mesmo com o env setado). O controle correto é a **opção
-    por requisição** `num_thread`, exposta aqui via `ARCANUM_OLLAMA_NUM_THREAD` (ex.: `=6` deixa 2 de 8
-    núcleos para o SO/UI). Requer reiniciar o `arcanum serve` (não o Ollama).
+    por requisição** `num_thread`. **Agora é automático:** por padrão o Arcanum deixa ~2 núcleos
+    físicos livres (`config.effective_num_thread()` → 6 de 8 nesta máquina), **sem precisar de env** —
+    basta reiniciar o `arcanum serve`. Para ajustar: `ARCANUM_OLLAMA_NUM_THREAD=N` (N exato) ou `=-1`
+    (usar todos os núcleos). Confirmado no llama-server: `-t 6` → `n_threads = 6`.
 - **Operacional:**
   - Rodar **UM** `arcanum serve` por vez. Antes de reiniciar, matar o processo anterior na porta 8000
     (`Get-NetTCPConnection -LocalPort 8000` → `Stop-Process`).
