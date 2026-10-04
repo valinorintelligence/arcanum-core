@@ -5,7 +5,11 @@
 > descoberta, atualize este documento** (veja [Protocolo de Atualização](#protocolo-de-atualização))
 > e o [`AGENTS.md`](../AGENTS.md).
 >
-> Última atualização: 2026-10-03 · Branch: `fix/arcanum-hardening`
+> Última atualização: 2026-10-04 · Branch: `fix/arcanum-hardening`
+>
+> **Roadmap estratégico (ações reais Red/Blue/Purple):** ver [`docs/RED_TEAM_ROADMAP.md`](RED_TEAM_ROADMAP.md)
+> — plano completo mapeado por tática ATT&CK, com os trilhos de segurança (ROE, classes de ação, HITL,
+> audit, kill-switch) e as fases F0–F5.
 
 ---
 
