@@ -22,6 +22,7 @@ class OllamaClient:
         repeat_penalty: float = 1.05,
         enable_thinking: bool = False,
         keep_alive: str | int = "30m",
+        num_thread: int = 0,
     ):
         self.base_url = base_url.rstrip("/")
         self.model = model
@@ -33,6 +34,9 @@ class OllamaClient:
         # How long Ollama keeps the model loaded after the last call. "-1" pins it
         # forever; a finite value ("30m") frees VRAM/RAM when idle (laptop-friendly).
         self.keep_alive = keep_alive
+        # CPU threads per request (0 = Ollama default/all cores). Set < core count
+        # to keep the machine responsive during inference.
+        self.num_thread = num_thread
         self._client = httpx.AsyncClient(base_url=self.base_url, timeout=timeout)
 
     async def chat(
@@ -61,6 +65,7 @@ class OllamaClient:
                 "temperature": self.temperature,
                 "num_predict": num_predict if num_predict is not None else self.num_predict,
                 "repeat_penalty": self.repeat_penalty,
+                **({"num_thread": self.num_thread} if self.num_thread else {}),
             },
         }
         if tools:
@@ -90,6 +95,7 @@ class OllamaClient:
                 "temperature": self.temperature,
                 "num_predict": self.num_predict,
                 "repeat_penalty": self.repeat_penalty,
+                **({"num_thread": self.num_thread} if self.num_thread else {}),
             },
         }
         if tools:

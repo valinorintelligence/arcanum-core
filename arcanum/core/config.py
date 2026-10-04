@@ -77,6 +77,12 @@ class ArcanumConfig(BaseSettings):
     # resources when Arcanum is idle so the machine stays responsive for other
     # work; the model reloads (a few seconds) on next use.
     ollama_keep_alive: str = "30m"
+    # CPU threads for inference. 0 = let Ollama auto-detect (uses all physical
+    # cores, which saturates the machine). On a laptop, set this below the core
+    # count (e.g. 6 of 8) to leave headroom for the OS/UI so it stays responsive
+    # during inference. NOTE: the OLLAMA_NUM_THREAD *server* env var is ignored by
+    # Ollama — thread count must be passed as a per-request option, which this does.
+    ollama_num_thread: int = 0
     # Embedding model for semantic retrieval (RAG). Pull with:
     #   ollama pull nomic-embed-text
     # If unavailable, recall gracefully falls back to keyword (FTS) search.

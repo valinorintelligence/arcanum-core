@@ -83,9 +83,13 @@ lentidão é de **recursos**, não de um laço infinito:
   VRAM/RAM quando o Arcanum fica ocioso. System prompt enxuto (já aplicado). Lock por sessão + abort de
   runs órfãos no disconnect (já aplicados).
 - **Ambiente (aplicar e reiniciar o Ollama):**
-  - `OLLAMA_NUM_THREAD=6` (deixa 2 núcleos para o SO/UI durante a inferência — mantém o laptop usável).
   - `OLLAMA_FLASH_ATTENTION=1` e `OLLAMA_KV_CACHE_TYPE=q8_0` (metade da memória do KV cache; cabe mais
-    contexto nos 4GB).
+    contexto nos 4GB). **Confirmado ativo** no startup do llama-server: `--flash-attn on
+    --cache-type-k q8_0 --cache-type-v q8_0`.
+  - **Threads da CPU:** o env `OLLAMA_NUM_THREAD` é **ignorado** pelo Ollama (não repassa ao
+    llama-server — verificado: `n_threads=8` mesmo com o env setado). O controle correto é a **opção
+    por requisição** `num_thread`, exposta aqui via `ARCANUM_OLLAMA_NUM_THREAD` (ex.: `=6` deixa 2 de 8
+    núcleos para o SO/UI). Requer reiniciar o `arcanum serve` (não o Ollama).
 - **Operacional:**
   - Rodar **UM** `arcanum serve` por vez. Antes de reiniciar, matar o processo anterior na porta 8000
     (`Get-NetTCPConnection -LocalPort 8000` → `Stop-Process`).
