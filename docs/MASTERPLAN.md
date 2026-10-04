@@ -216,6 +216,14 @@ A cada nova descoberta ou correção:
   - **Fix de código:** `keep_alive` configurável (`ARCANUM_OLLAMA_KEEP_ALIVE`, padrão "30m") — libera
     VRAM/RAM quando ocioso ([config.py], [llm.py], [main.py]). Post-mortem completo em
     `docs/LEARNINGS_AND_TROUBLESHOOTING.md` §4.
-  - **Recomendações de ambiente (usuário aplica + reinicia Ollama):** `OLLAMA_NUM_THREAD=6` (deixa
-    núcleos para o SO), `OLLAMA_FLASH_ATTENTION=1`, `OLLAMA_KV_CACHE_TYPE=q8_0`. Rodar 1 server por vez;
-    Docker só ao usar `execute`. **385 testes verdes.**
+  - **Recomendações de ambiente (usuário aplica + reinicia Ollama):** `OLLAMA_FLASH_ATTENTION=1`,
+    `OLLAMA_KV_CACHE_TYPE=q8_0`. Rodar 1 server por vez; Docker só ao usar `execute`. **385 testes verdes.**
+- **2026-10-04 — Tuning do Ollama APLICADO e CONFIRMADO (✅):**
+  - `OLLAMA_FLASH_ATTENTION=1` + `OLLAMA_KV_CACHE_TYPE=q8_0` setados (setx) e Ollama reiniciado.
+    Confirmado no startup do llama-server do 7B: `--flash-attn on --cache-type-k q8_0 --cache-type-v q8_0`.
+  - **Threads:** descoberto que `OLLAMA_NUM_THREAD` (env) é **ignorado** (n_threads=8). Implementado o
+    caminho correto: opção de requisição `num_thread` via `ARCANUM_OLLAMA_NUM_THREAD` (setado =6).
+    Confirmado: reload do 7B com `-t 6` → `n_threads = 6` (deixa 2 de 8 núcleos para o SO). Commits
+    88804c1 (keep_alive) e 61ae4a3 (num_thread).
+  - **AÇÃO PENDENTE do usuário:** reiniciar `arcanum serve` uma vez para o servidor passar a usar
+    `keep_alive=30m` + `num_thread=6` (o processo atual na 8000 ainda roda com config antiga).
