@@ -99,3 +99,14 @@ lentidão é de **recursos**, não de um laço infinito:
     `OLLAMA_NUM_PARALLEL=1` serializa, mas o ideal é uma por vez neste hardware).
   - Ligar o **Docker Desktop apenas** quando for usar a ferramenta `execute` (recon real via Kali);
     as ~116 ferramentas `audit_*` nativas não precisam de Docker.
+
+### Investigação de cache KV (resultado negativo — NÃO re-tentar)
+Hipótese: manter o array de `tools` estável entre turnos reusaria o KV cache do Ollama e cortaria o
+turno quente. **Medido e descartado:** em isolamento, prompt idêntico reusa o cache (0,3s) e mudar as
+tools custa re-prefill (~98s); porém, num run real, cada turno **anexa** a tool_call do assistente + o
+resultado da ferramenta, o que **quebra o reuso de prefixo de qualquer jeito** (medido: turno quente
+re-prefila ~2000 tokens em ~30s mesmo com tools estáveis). Conclusão: o custo do turno quente é
+**prefill CPU-bound do 7B** (~70 tok/s), inerente ao hardware (GTX 1650 4GB). Não há alavanca de
+software; manter o filtro de ferramentas já executadas é melhor (arrays menores ao longo do run e
+evita re-propor ferramentas). Os ganhos reais de performance são: system prompt enxuto (prefill a
+frio ~110s→~49s), flash-attention + KV q8, `num_thread` deixando 2 núcleos livres, e `keep_alive=30m`.
