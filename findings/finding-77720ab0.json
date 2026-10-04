@@ -1,0 +1,24 @@
+{
+  "id": "finding-77720ab0",
+  "session_id": "op-regress",
+  "title": "Cabe\u00e7alho de Seguran\u00e7a Ausente: Content-Security-Policy",
+  "type": "missing_security_header",
+  "severity": "high",
+  "status": "confirmed",
+  "cvss_score": 7.5,
+  "affected": {
+    "target": "https://example.com",
+    "tool": "audit_security_headers"
+  },
+  "evidence": {
+    "header": "Content-Security-Policy",
+    "description": "x",
+    "target": "https://example.com"
+  },
+  "poc": {
+    "description": "Detectado deterministicamente pela ferramenta de auditoria 'audit_security_headers'."
+  },
+  "remediation": "Configure CSP",
+  "verified": true,
+  "created_at": "2026-10-04T16:15:36.255911+00:00"
+}

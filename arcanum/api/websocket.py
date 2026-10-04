@@ -59,6 +59,52 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
+async def _drive_agent_stream(websocket, app, session_id: str, engine, agen) -> bool:
+    """Stream an agent event generator (engine.run or engine.execute_approved) to
+    all connections for the session, with a per-session run lock and session
+    status (running<->complete) management.
+
+    Returns False if rejected because a run is already in flight for the session
+    (the engine is shared, so concurrent runs would corrupt its state).
+    """
+    if session_id in _running_sessions:
+        try:
+            await websocket.send_json({
+                "type": "info",
+                "content": "Já existe uma operação em execução nesta sessão. Aguarde a conclusão ou interrompa-a antes de enviar uma nova instrução.",
+            })
+        except Exception:
+            pass
+        return False
+
+    _running_sessions.add(session_id)
+    _es = getattr(engine, "session", None) or {}
+    sess_name = _es.get("name") if isinstance(_es, dict) else getattr(_es, "name", None)
+    try:
+        if sess_name:
+            await app.state.session_mgr.update_session(sess_name, status="running")
+    except Exception:
+        pass
+    try:
+        async for event in agen:
+            await manager.broadcast(session_id, event)
+    except Exception as e:
+        try:
+            await websocket.send_json({"type": "error", "message": str(e)})
+        except Exception:
+            pass
+    finally:
+        _running_sessions.discard(session_id)
+        # 'running' only while a run is paused awaiting approval; else it finished.
+        try:
+            if sess_name:
+                new_status = "running" if getattr(engine, "pending_action", None) else "complete"
+                await app.state.session_mgr.update_session(sess_name, status=new_status)
+        except Exception:
+            pass
+    return True
+
+
 @router.websocket("/ws/{session_id}")
 async def websocket_endpoint(websocket: WebSocket, session_id: str):
     # Authenticate before accepting: the browser can't set headers on a WS
@@ -158,14 +204,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
 
                 if engine.pending_action and clean_input in affirmative_phrases:
                     await manager.broadcast(session_id, {"type": "approved", "content": "Ação aprovada pelo operador"})
-                    try:
-                        async for event in engine.execute_approved():
-                            await manager.broadcast(session_id, event)
-                    except Exception as e:
-                        try:
-                            await websocket.send_json({"type": "error", "message": str(e)})
-                        except Exception:
-                            pass
+                    await _drive_agent_stream(websocket, app, session_id, engine, engine.execute_approved())
                     continue
 
                 if engine.pending_action and clean_input in cancel_phrases:
@@ -173,41 +212,8 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                     await manager.broadcast(session_id, {"type": "cancelled", "content": f"Ação {cancelled_tool} cancelada pelo operador"})
                     continue
 
-                # Concurrency guard: one run per session (shared engine state).
-                if session_id in _running_sessions:
-                    await websocket.send_json({
-                        "type": "info",
-                        "content": "Já existe uma operação em execução nesta sessão. Aguarde a conclusão ou interrompa-a antes de enviar uma nova instrução.",
-                    })
-                    continue
-
-                # Stream agent events
-                _running_sessions.add(session_id)
-                _es = getattr(engine, "session", None) or {}
-                sess_name = _es.get("name") if isinstance(_es, dict) else getattr(_es, "name", None)
-                try:
-                    if sess_name:
-                        await app.state.session_mgr.update_session(sess_name, status="running")
-                except Exception:
-                    pass
-                try:
-                    async for event in engine.run(user_input):
-                        await manager.broadcast(session_id, event)
-                except Exception as e:
-                    try:
-                        await websocket.send_json({"type": "error", "message": str(e)})
-                    except Exception:
-                        pass
-                finally:
-                    _running_sessions.discard(session_id)
-                    # Reflect the real lifecycle state: 'running' only while a run
-                    # is awaiting operator approval; otherwise the run finished.
-                    try:
-                        if sess_name:
-                            new_status = "running" if getattr(engine, "pending_action", None) else "complete"
-                            await app.state.session_mgr.update_session(sess_name, status=new_status)
-                    except Exception:
-                        pass
+                # Stream agent events (per-session lock + status handled in helper).
+                await _drive_agent_stream(websocket, app, session_id, engine, engine.run(user_input))
 
             elif msg_type == "approve":
                 # Handle copilot / manual approval
@@ -215,14 +221,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 engine = app.state.active_engines.get(session_id)
                 if engine and engine.pending_action:
                     await manager.broadcast(session_id, {"type": "approved", "content": "Action approved by operator"})
-                    try:
-                        async for event in engine.execute_approved():
-                            await manager.broadcast(session_id, event)
-                    except Exception as e:
-                        try:
-                            await websocket.send_json({"type": "error", "message": str(e)})
-                        except Exception:
-                            pass
+                    await _drive_agent_stream(websocket, app, session_id, engine, engine.execute_approved())
                 else:
                     await manager.broadcast(session_id, {"type": "info", "content": "No action pending approval"})
 
