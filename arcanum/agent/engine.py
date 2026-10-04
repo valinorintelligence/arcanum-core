@@ -304,9 +304,15 @@ class AgentEngine:
                 # Hybrid routing: fast tactical tier for recon/scan tools, deep tier for exploit/report
                 active_llm = self.deep_llm if self.current_phase in ("exploit", "report") else self.llm
                 if explicit_tools and not all_explicit_done:
-                    # Provide ONLY the remaining pending tools to the LLM (plus minimal internal utilities)
-                    # This prevents the LLM from ever re-calling an already executed tool!
-                    focused_set = set(pending_tools) | {"execute", "read_memory", "update_memory", "query_graph"}
+                    # Keep the tool set STABLE across turns (the FULL requested set,
+                    # not the shrinking 'pending' set) so Ollama reuses its KV prefix
+                    # cache. Changing the tools array each turn invalidated the cache
+                    # and forced a near-full re-prefill (~40-100s/turn vs ~1-3s,
+                    # measured). The per-step [DIRETIVA] message tells the model which
+                    # tool to call next, and the stagnation guards block re-running
+                    # completed ones — so steering/no-rerun is preserved without the
+                    # cache-busting churn.
+                    focused_set = set(explicit_tools) | {"execute", "read_memory", "update_memory", "query_graph"}
                     active_tools = [t for t in NATIVE_TOOLS if t["function"]["name"] in focused_set]
                 else:
                     all_phase_tools = get_tools_for_phase(self.current_phase)
@@ -314,14 +320,15 @@ class AgentEngine:
                         domain_only = {"audit_dns_email_security", "search_cert_transparency", "audit_subdomain_takeover", "audit_mta_sts_dane", "audit_dkim_bimi"}
                         all_phase_tools = [t for t in all_phase_tools if t["function"]["name"] not in domain_only]
 
-                    # For Qwen 7B & local LLMs: exclude already executed tools (prevent loops and token bloat)
-                    unexecuted = [
-                        t for t in all_phase_tools
-                        if t["function"]["name"] not in executed_names
-                        or t["function"]["name"] in ("execute", "create_finding", "read_memory", "update_memory", "query_graph")
-                    ]
+                    # Keep the tool set STABLE across turns (do NOT drop already
+                    # executed tools) so Ollama reuses its KV prefix cache — filtering
+                    # the tools array each turn invalidated the cache and forced a
+                    # near-full re-prefill (~40-100s/turn vs ~1-3s, measured). The
+                    # stagnation guards already stop the model from re-running a tool.
+                    unexecuted = all_phase_tools
 
-                    # If still too large (>16 tools), prioritize core discovery/assessment tools to keep prompt small
+                    # Cap large phase toolsets to a stable priority subset to fit the
+                    # local model's context window (the subset is the same every turn).
                     if len(unexecuted) > 16:
                         if self.current_phase == "recon":
                             priority_order = [
