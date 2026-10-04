@@ -230,3 +230,137 @@ Cada fase: tools com schema + classe de ação + testes (unit + regressão) + at
 - **2026-10-04** — Documento criado. Estado atual mapeado; plano F0–F5 definido. Nada de ação real
   implementado ainda (base: recon/auditoria passiva + artefatos). Próximo sugerido: **F0** (ROE +
   classes de ação + HITL tiers + audit log + kill-switch) por destravar com segurança todo o resto.
+- **2026-10-04** — Anexadas specs de implementação de F0/F2/F3 (seção 10) para execução em sessão nova.
+
+---
+
+## 10. Specs de implementação (prontas para codar) — F0 · F2 · F3
+
+> Ordem de dependência: **F0 → F2 → F3**. Cada fase: módulos + modelos de dados + tools do agente
+> (governadas pela F0) + endpoints + testes + critério de aceite. Manter os 394 testes existentes verdes.
+
+### F0 — Fundação de segurança/governança (keystone)
+**Pacote `arcanum/redteam/`:**
+- `action_classes.py`: enum `PASSIVE|ACTIVE|EXPLOIT|POST_EXPLOIT|DESTRUCTIVE`; `TOOL_ACTION_CLASS`
+  (audit_*/query_*/search_* → PASSIVE; `execute` → ACTIVE, com upgrade por heurística do comando:
+  sqlmap --dump/hydra/metasploit → EXPLOIT; rm/mkfs/encrypt → DESTRUCTIVE); `classify(tool,args)`.
+- `engagement.py` — `EngagementManager`: `create(name,scope,allowed_classes,window)` (gera `roe_hash`),
+  `active_for(session)`, `is_allowed(engagement,cls,target) -> (bool,reason)` (janela + classe + escopo).
+  **Backward-compat:** sem engajamento ativo, não bloqueia por classe (mantém comportamento atual).
+- `audit.py` — `ActionAuditLog`: `record(...)` append-only com **hash encadeado** (`sha256(prev+payload)`),
+  `verify_chain()`, `list()`.
+- `sessions.py` — `SessionRegistry`: CRUD de footholds/implantes + `cleanup(engagement)`.
+**DB (`core/database.py`):** tabelas `engagements`, `actions_log`, `redteam_sessions`; colunas em
+`graph_nodes`: `owned` (none/user/admin/system), `creds_held`, `foothold_id` (migration idempotente).
+**Engine (`engine.py` no dispatch):** `cls=classify(...)`; se engajamento ativo e `not is_allowed` →
+bloquear (evento `blocked_by_roe`); classe → tier HITL em `_assess_risk` (PASSIVE auto · ACTIVE aprova ·
+EXPLOIT/DESTRUCTIVE dupla aprovação); pós-execução `audit.record(...)` (args mascarados); `abort()` →
+**kill-switch global** (aborta run + `SessionRegistry.cleanup`).
+**API:** `engagements` (POST/GET), `actions` (GET log/verify), `redteam/sessions` (GET/DELETE), `POST /killswitch`.
+**Aceite:** engajamento `[PASSIVE,ACTIVE]` → tool EXPLOIT bloqueada+logada; audit chain íntegro;
+kill-switch encerra sessões; 394 + novos testes verdes.
+
+### F2 — Blue Team: ação defensiva real (deploy + verificação)
+**Pacote `arcanum/blue/`:**
+- `deployers/siem.py` · `edr.py` · `waf.py` — cada adapter: `deploy(rule)->{id,status}`, `verify(id)->bool`,
+  `rollback(id)`. Reusar `integrations/hub.py` + credenciais (Splunk/Elastic/Datadog; ModSecurity/Suricata).
+  **Mock honesto** sem credenciais (padrão `jira.py`): retorna `{mock:true}`, nunca finge deploy real.
+- `hardening.py` — aplica saída de `generate_hardening_baseline` via Ansible/SSH/PR de IaC: **dry-run →
+  diff → aprovar → aplicar → verificar**, com `rollback`.
+- `response.py` — IR: `isolate_host`, `disable_account`, `block_ip` (via APIs EDR/firewall), reversíveis.
+**Tools do agente (gov. F0):** `deploy_detection_rule`, `verify_detection_active`, `apply_hardening`
+(dry-run por padrão), `ir_contain`. Classe: ACTIVE/mudança-blue → HITL + audit + **rollback registry**.
+**Fluxo:** `generate_detection_rules`(Sigma/YARA/ModSec) → `deploy_detection_rule` → `verify_detection_active`.
+**Testes:** adapters com SIEM/WAF mockados; dry-run gera diff sem aplicar; rollback funciona; audit grava.
+**Aceite:** gerar uma regra Sigma, fazer deploy (mock ou real), confirmar que está **ativa**, e dar rollback.
+**Depende de:** F0 (+ SIEM/EDR/WAF reais ou mock p/ testes).
+
+### F3 — Purple Team: loop fechado (BAS medido)
+**Pacote `arcanum/purple/`:**
+- `bas.py` — `run_bas_test(technique_id)`: executa Atomic Red Team (via sandbox/host autorizado) com
+  **deconfliction tag** + gates F0.
+- `verify.py` — `was_detected(technique, tag, window)`: consulta SIEM/EDR (via integrations) por alerta
+  correspondente na janela → detectado sim/não.
+- efficacy: alimentar `mitre/engine.py` (`MitreEfficacyEngine`) com resultados **medidos** (substituindo o
+  seed estático) por técnica.
+- `loop.py` — orquestra: run técnica → verifica detecção → se MISS: `generate_detection_rules` + F2
+  `deploy` → re-run → re-verifica → relatório. Reusa padrões do `retest.py`.
+- `campaign.py` — encadeia técnicas ATT&CK (plano de emulação), mede cobertura ponta-a-ponta, gera
+  **relatório de lacunas**. CTEM daemon pode agendar campanhas recorrentes.
+**Tools do agente:** `run_bas_test`, `verify_detection`, `measure_coverage`, `run_purple_campaign`.
+**Testes:** BAS com execução mockada; verifier com SIEM mock (hit/miss); loop detectar→tunar→validar;
+relatório de cobertura; audit.
+**Aceite:** rodar técnica T → medir detecção (sim/não) → se não, tunar+re-deploy+re-medir → cobertura %
+no relatório. Eficácia MEDIDA, não seed.
+**Depende de:** F0 + F2 (+ SIEM/EDR reais ou mock p/ testes).
+
+---
+
+## 11. Specs do ofensivo (F1 · F4 · F5) — **apenas framework gated**
+
+> **Escopo e limite:** esta seção especifica **só a estrutura de governança/orquestração** — schema das
+> tools, classe de ação, tier de HITL, auditoria, estado de comprometimento, captura de prova e o
+> **ponto de delegação** para ferramentas estabelecidas (Metasploit, impacket, netexec, sliver, linpeas,
+> hashcat — já na imagem Kali). **Não contém código de exploit, payloads, técnicas de evasão nem
+> comandos de ataque.** A execução real é delegada à ferramenta estabelecida, invocada pelo operador
+> **autorizado** através do `execute`/RPC governado. Nada aqui roda sem engajamento (ROE) válido, classe
+> de ação permitida, aprovação HITL e registro em auditoria.
+
+### Contrato comum a TODA tool ofensiva (fornecido pela F0)
+Cada handler ofensivo é um "wrapper governado" com o mesmo esqueleto:
+1. `classify()` define a classe (EXPLOIT/POST_EXPLOIT/DESTRUCTIVE) → o engine checa ROE + janela + HITL.
+2. Opera **através de um foothold** do `SessionRegistry` (exceto o de acesso inicial).
+3. **Delega** a ação à ferramenta estabelecida (não implementa a técnica).
+4. Captura **prova mínima** (saída/screenshot/amostra mascarada) → evidência do finding.
+5. **Registra** em `actions_log` (deconfliction tag), atualiza **estado de comprometimento** no grafo e o
+   **cofre** (creds mascaradas), e anota **obrigação de cleanup**.
+
+### F1 — Acesso inicial / red estruturado (base não-destrutiva)
+- `map_service_to_exploits` (ACTIVE): orquestra `nmap -sV` → `search_cve`/`enrich_cve_threat` → candidatos
+  no grafo. Sem ataque — só correlação.
+- `exploit_webapp` (EXPLOIT, dupla aprovação): **delega** a confirmação de acesso a uma ferramenta
+  estabelecida (ex.: Metasploit RPC) contra alvo do ROE; em sucesso → `SessionRegistry.create_foothold`
+  + `capture_proof`. O "como explorar" é da ferramenta, não deste repo.
+- `capture_proof` (utilitário): padroniza evidência (shell confirmado / output / amostra mascarada).
+- **Aceite:** de uma vuln confirmada + aprovação, registrar um foothold com prova (não só finding).
+
+### F4 — Pós-exploração & movimento lateral (via foothold)
+Todas operam **através de um foothold existente** e **delegam** à ferramenta estabelecida:
+- `run_on_target` (POST_EXPLOIT): roteia um comando pela sessão/C2 ao host comprometido (distinto do
+  `execute` na sandbox). Comando destrutivo → DESTRUCTIVE + dupla aprovação.
+- `enumerate_privesc` / `attempt_privesc` (POST_EXPLOIT; kernel → dupla aprovação): delega a linpeas/winpeas
+  e a catálogos estabelecidos; em elevação, atualiza `owned` no grafo.
+- `dump_credentials` (POST_EXPLOIT, **dupla aprovação**): delega a impacket/ferramenta de dump; creds →
+  cofre **mascaradas** + grafo.
+- `crack_hashes` (ACTIVE): delega a hashcat/hydra na sandbox.
+- `discover_on_host` (POST_EXPLOIT): enumeração interna pós-foothold → novos alvos no grafo.
+- `lateral_move` (EXPLOIT, **aprovação por hop**): delega a impacket/netexec/evil-winrm; cada salto →
+  novo foothold + aresta "via X" no grafo.
+- `setup_pivot` (EXPLOIT): delega a chisel/tunneling.
+- `establish_c2` (POST_EXPLOIT, **dupla aprovação**): delega a sliver/pwncat; sessão registrada,
+  listável e **matável** pelo kill-switch.
+- **Aceite:** executar um caminho multi-hop do grafo (hoje só `simulate_attack_path`) com prova por hop e
+  tudo no audit log; kill-switch encerra todas as sessões.
+
+### F5 — Collection / Exfiltration / Impact (gate máximo; maioria OFF)
+- `collect_sample` (POST_EXPLOIT): coleta **mínima** de arquivo sensível, **mascarada**, só p/ prova.
+- `demo_exfiltration` (DESTRUCTIVE-adjacent, **dupla aprovação**): canal limitado por **tamanho/taxa**,
+  para testar DLP; **loga exatamente o que saiu**; nunca dado real relevante.
+- `impact_poc` (DESTRUCTIVE, **desligado por padrão** via `allow_destructive_testing`): só com ROE
+  explícito + dupla aprovação + **backup** + diretório de teste isolado. Ransomware-sim/defacement só em
+  staging que o cliente autorizou.
+- **Aceite:** demonstrar exfil detectável/bloqueável sem vazamento real; `impact_poc` permanece OFF salvo
+  ROE que o exija.
+
+### Governança transversal do ofensivo (responsabilidade do framework)
+- **Deconfliction:** toda ação carimba o `engagement_id` para o Blue separar do ataque real (vital em Purple).
+- **OPSEC profile** (`stealth`|`loud`): afeta ritmo/timing; reusa detecção de WAF/CDN.
+- **Cleanup obrigatório** no encerramento: `SessionRegistry.cleanup` remove implantes, persistência e
+  contas de teste; auditoria confirma 100% de limpeza.
+- **Kill-switch** cobre runs + sessões + implantes.
+- **Modelo:** ofensivo em **copilot** (humano aprova cada ação); autonomia só após métricas de confiança.
+
+### Ordem e pré-requisitos (recap)
+`F0 → F2 → F3 → F1 → F4 → F5`. O ofensivo (F1/F4/F5) exige, além da F0: **Docker/sandbox ligados**, **lab
+autorizado próprio** (DVWA/Metasploitable/AD de teste — nunca produção/terceiros), **ROE assinado** e
+decisão de **HITL/modelo**. Implementar **por capacidade, com revisão humana** — não em passe autônomo.
