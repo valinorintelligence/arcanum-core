@@ -91,7 +91,7 @@ Ryzen 7 4800H (8C/16T) · **GTX 1650 Mobile — 4GB VRAM** · 63GB RAM · Ollama
 | **L** | TUI stub: `_engine` nunca conectado; actions placeholder; `_handle_event` lê campos errados | [cli/app.py:141] | conectar engine ou marcar TUI como experimental |
 | **WordPress falso** | `_detect_tech_keywords` varre últimas 6 msgs; a `system` (cita wordpress/plugins) entra nelas → falso-positivo em toda sessão | [engine.py:848] | exigir sinais fortes (wp-content/wp-json/?author=); não varrer a `system` |
 
-### 🟡 P2 — Qualidade / robustez — ⏳ EM ANDAMENTO (2026-10-03)
+### 🟡 P2 — Qualidade / robustez — ✅ ITENS DE VALOR CONCLUÍDOS (skills/TUI = decisões documentadas)
 - **123 blocos `except...pass`** (falhas silenciosas — dificultam diagnóstico).
 - **Código morto:** `arcanum/agent/orchestrator.py` e `arcanum/agent/skills.py` (nunca importados).
 - `app.state.browser` nunca setado → ferramenta `browser_action` morta (headless usa `_browser_agent` lazy).
@@ -227,3 +227,21 @@ A cada nova descoberta ou correção:
     88804c1 (keep_alive) e 61ae4a3 (num_thread).
   - **AÇÃO PENDENTE do usuário:** reiniciar `arcanum serve` uma vez para o servidor passar a usar
     `keep_alive=30m` + `num_thread=6` (o processo atual na 8000 ainda roda com config antiga).
+- **2026-10-04 — num_thread automático + fecho do P2:**
+  - `num_thread` agora é **à prova de terminal**: `effective_num_thread()` (commit c3c7daa) deixa ~2
+    núcleos físicos livres por padrão (6 de 8 aqui) **sem depender de env** — resolve a fragilidade do
+    `setx` (só valia para shells novos). `-1` = todos os núcleos; `N>0` = exato.
+  - **Logging de diagnóstico validado em produção:** o restart do usuário mostrou o aviso
+    "Imagem do sandbox nao encontrada" — que revelou o **Docker down** após o reboot (imagem intacta;
+    `execute` indisponível até ligar o Docker; tools nativas não precisam).
+  - **Decisões P2 (não-bugs):**
+    - **`skills.py` (57 skills):** mantido, documentado como **superseded** por Playbooks(FTS5)+RAG
+      (o recall semântico já cobre o caso sem inflar o prompt). Reconectar injetando passos no prompt
+      contradiz o fix de contexto (Perf). Melhoria futura possível: *seed* das 57 skills no
+      PlaybookManager (entra no recall sem bloat) — requer aprovação.
+    - **`orchestrator.py`:** removido (morto, sem conteúdo de valor).
+    - **TUI (L):** mantida como stub documentado; o **Web UI é o produto**. Tornar funcional é esforço
+      maior e de baixo valor — requer aprovação explícita.
+    - **`except...pass` (~120):** os críticos do lifespan agora logam; o restante são best-effort por
+      checagem (fallback gracioso) — deixados como estão.
+  - **Estado:** P0 ✅, P1 ✅ (exceto L), P2 ✅ (valor) — 385 testes verdes em todos os passos.
