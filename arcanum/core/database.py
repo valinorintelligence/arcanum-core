@@ -206,6 +206,10 @@ CREATE TABLE IF NOT EXISTS engagements (
     roe_hash TEXT NOT NULL,       -- tamper-evidence hash of the contract
     status TEXT DEFAULT 'active', -- active | closed
     operator TEXT,
+    auto_approve INTEGER DEFAULT 0, -- 1 = full-scope LAB ROE: the signed engagement pre-authorizes
+                                    -- its allowed classes, waiving the per-action HITL pause (audit/
+                                    -- scope/cleanup/deconfliction STILL apply; DESTRUCTIVE also needs
+                                    -- allow_destructive_testing). Only for an operator's own lab.
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     closed_at DATETIME
 );
@@ -230,6 +234,20 @@ CREATE TABLE IF NOT EXISTS actions_log (
 );
 CREATE INDEX IF NOT EXISTS idx_actions_log_engagement ON actions_log(engagement_id);
 
+-- Tamper anchor for the actions_log hash chain (F0 follow-up #4). The hash chain
+-- alone detects edits to existing rows but NOT truncation of the tail (deleting
+-- the last N entries). This single-row anchor records the expected entry count and
+-- last hash, updated under the same append lock as actions_log, so verify_chain
+-- can catch tail truncation (count/last-hash mismatch). It does not defend against
+-- an attacker who rewrites both the log AND the anchor (same threat model as a full
+-- chain rewrite) — for that, anchor the last hash in external storage.
+CREATE TABLE IF NOT EXISTS audit_anchor (
+    id INTEGER PRIMARY KEY CHECK (id = 1),  -- single row
+    entry_count INTEGER NOT NULL DEFAULT 0,
+    last_hash TEXT NOT NULL DEFAULT '',
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS redteam_sessions (
     id TEXT PRIMARY KEY,
     engagement_id TEXT,
@@ -238,8 +256,8 @@ CREATE TABLE IF NOT EXISTS redteam_sessions (
     access_level TEXT DEFAULT 'user',  -- none | user | admin | system
     implant_type TEXT DEFAULT 'shell',
     parent_id TEXT,              -- pivot parent foothold
-    status TEXT DEFAULT 'open',  -- open | cleaned | closed
-    metadata TEXT,               -- JSON
+    status TEXT DEFAULT 'open',  -- open | cleaned | closed | cleanup_pending | cleanup_failed
+    metadata TEXT,               -- JSON (incl. optional teardown_recipe for real cleanup)
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     closed_at DATETIME
 );
@@ -281,6 +299,9 @@ CREATE TABLE IF NOT EXISTS purple_results (
     detected INTEGER,            -- NULL = unknown, 0 = miss, 1 = hit
     detection_source TEXT,       -- deployed_rule | deployed_rule_simulated | siem | none
     detection_simulated INTEGER DEFAULT 0, -- 1 = detection only via a MOCK deploy (no real control)
+    prevented INTEGER,           -- NULL = unknown, 0 = not prevented, 1 = BLOCKED by a control
+    prevention_source TEXT,      -- bas_blocked | deployed_control | deployed_control_simulated | none
+    prevention_simulated INTEGER DEFAULT 0, -- 1 = prevention only via a MOCK preventive deploy
     tuned INTEGER DEFAULT 0,     -- a detection rule was deployed to close the gap
     deployment_id TEXT,          -- the rule deployed to close the gap (if any)
     session_id TEXT,
@@ -381,6 +402,30 @@ class Database:
             if pcols and "detection_simulated" not in pcols:
                 await self._conn.execute(
                     "ALTER TABLE purple_results ADD COLUMN detection_simulated INTEGER DEFAULT 0")
+            # F3 (d): PREVENTION (BLOCKED by a control) is distinct from DETECTION
+            # (alerted/logged). Tracked separately, with the same real-vs-simulated
+            # honesty split. Idempotent for already-created DBs.
+            if pcols and "prevented" not in pcols:
+                await self._conn.execute(
+                    "ALTER TABLE purple_results ADD COLUMN prevented INTEGER")
+            if pcols and "prevention_source" not in pcols:
+                await self._conn.execute(
+                    "ALTER TABLE purple_results ADD COLUMN prevention_source TEXT")
+            if pcols and "prevention_simulated" not in pcols:
+                await self._conn.execute(
+                    "ALTER TABLE purple_results ADD COLUMN prevention_simulated INTEGER DEFAULT 0")
+            await self._conn.commit()
+        except Exception:
+            pass
+
+        # Full-scope lab ROE (auto_approve): pre-authorizes allowed classes for an
+        # operator's own lab, waiving the per-action HITL pause (rails stay). Idempotent.
+        try:
+            cursor = await self._conn.execute("PRAGMA table_info(engagements)")
+            ecols = {row["name"] for row in await cursor.fetchall()}
+            if ecols and "auto_approve" not in ecols:
+                await self._conn.execute(
+                    "ALTER TABLE engagements ADD COLUMN auto_approve INTEGER DEFAULT 0")
             await self._conn.commit()
         except Exception:
             pass

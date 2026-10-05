@@ -41,12 +41,16 @@ class PurpleCampaign:
                 tid, campaign_id=campaign_id, tactic=tactic, command=command,
                 auto_tune=auto_tune)
             after = res.get("after") or {}
+            prev_before = res.get("before_prevention", {})
             per_technique.append({
                 "technique_id": tid,
                 "status": res.get("status"),
                 "detected_before": res.get("before", {}).get("detected"),
                 "detected_after": after.get("detected") if res.get("tuned") else None,
                 "detection_simulated": after.get("simulated") if res.get("tuned") else res.get("before", {}).get("simulated"),
+                "prevented": prev_before.get("prevented"),
+                "prevention_source": prev_before.get("source"),
+                "prevention_simulated": prev_before.get("simulated"),
                 "tuned": res.get("tuned"),
             })
 
@@ -75,6 +79,8 @@ class PurpleCampaign:
                 "simulated_coverage_gaps": sim_gaps,
                 "coverage_percent": coverage["coverage_percent"],
                 "coverage_percent_real": coverage["coverage_percent_real"],
+                "prevention_percent": coverage.get("prevention_percent", 0.0),
+                "prevention_percent_real": coverage.get("prevention_percent_real", 0.0),
                 "recommendation": rec,
             },
         }

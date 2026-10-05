@@ -61,8 +61,9 @@ class EngagementManager:
 
     @staticmethod
     def compute_roe_hash(name: str, scope: list, allowed_classes: list,
-                         window_start: Any, window_end: Any) -> str:
-        """Deterministic hash of the ROE contract (tamper-evidence)."""
+                         window_start: Any, window_end: Any, auto_approve: bool = False) -> str:
+        """Deterministic hash of the ROE contract (tamper-evidence). ``auto_approve``
+        is part of the contract (it waives the per-action HITL pause), so it is covered."""
         payload = json.dumps(
             {
                 "name": name or "",
@@ -70,6 +71,7 @@ class EngagementManager:
                 "allowed_classes": sorted([_norm_class(c) for c in (allowed_classes or [])]),
                 "window_start": str(window_start or ""),
                 "window_end": str(window_end or ""),
+                "auto_approve": bool(auto_approve),
             },
             sort_keys=True,
             ensure_ascii=False,
@@ -86,8 +88,14 @@ class EngagementManager:
         window: tuple | dict | None = None,
         session_id: str | None = None,
         operator: str | None = None,
+        auto_approve: bool = False,
     ) -> dict:
-        """Create (and activate) an engagement, returning its row as a dict."""
+        """Create (and activate) an engagement, returning its row as a dict.
+
+        ``auto_approve=True`` marks a full-scope LAB ROE: the signed engagement
+        pre-authorizes its allowed classes, so the engine waives the per-action HITL
+        pause (audit/scope/cleanup/deconfliction still apply). Only for a lab the
+        operator owns; DESTRUCTIVE additionally requires ``allow_destructive_testing``."""
         scope = [str(s).strip() for s in (scope or []) if str(s).strip()]
         # Default to the two non-offensive classes if unspecified (safe baseline).
         classes = [_norm_class(c) for c in (allowed_classes or [ActionClass.PASSIVE, ActionClass.ACTIVE])]
@@ -102,21 +110,53 @@ class EngagementManager:
         ws = _parse_dt(window_start)
         we = _parse_dt(window_end)
         eid = "eng-" + uuid.uuid4().hex[:12]
-        roe_hash = self.compute_roe_hash(name, scope, classes, ws.isoformat() if ws else "", we.isoformat() if we else "")
+        roe_hash = self.compute_roe_hash(
+            name, scope, classes, ws.isoformat() if ws else "", we.isoformat() if we else "",
+            auto_approve=bool(auto_approve))
         now = _now().isoformat()
 
         await self.db.execute(
             """INSERT INTO engagements
                (id, name, session_id, scope, allowed_classes, window_start, window_end,
-                roe_hash, status, operator, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)""",
+                roe_hash, status, operator, auto_approve, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)""",
             (
                 eid, name, session_id, json.dumps(scope), json.dumps(classes),
                 ws.isoformat() if ws else None, we.isoformat() if we else None,
-                roe_hash, operator, now,
+                roe_hash, operator, 1 if auto_approve else 0, now,
             ),
         )
         return await self.get(eid)
+
+    async def create_lab_preset(
+        self,
+        name: str,
+        scope: list,
+        window: tuple | dict | None = None,
+        session_id: str | None = None,
+        operator: str | None = None,
+        auto_approve: bool = True,
+        include_destructive: bool = False,
+    ) -> dict:
+        """Full-scope LAB ROE preset: pre-authorizes ALL non-destructive classes
+        (PASSIVE→POST_EXPLOIT) — plus DESTRUCTIVE when ``include_destructive`` — for a
+        scope the operator owns, with ``auto_approve`` so the engagement itself is the
+        authorization (no per-action human pause). **Scope is REQUIRED** so this can
+        never pre-authorize the whole internet. The rails stay: every action is still
+        audited, scope-enforced, deconflicted and reversible, and DESTRUCTIVE still
+        honors ``allow_destructive_testing``.
+        """
+        scope = [str(s).strip() for s in (scope or []) if str(s).strip()]
+        if not scope:
+            raise ValueError("create_lab_preset requires an explicit scope (your authorized lab) — "
+                             "a full-scope preset must never be unscoped.")
+        classes = [ActionClass.PASSIVE, ActionClass.ACTIVE, ActionClass.EXPLOIT,
+                   ActionClass.POST_EXPLOIT]
+        if include_destructive:
+            classes.append(ActionClass.DESTRUCTIVE)
+        return await self.create(
+            name=name, scope=scope, allowed_classes=classes, window=window,
+            session_id=session_id, operator=operator, auto_approve=auto_approve)
 
     async def get(self, engagement_id: str) -> dict | None:
         row = await self.db.fetch_one("SELECT * FROM engagements WHERE id = ?", (engagement_id,))
@@ -259,5 +299,6 @@ class EngagementManager:
                     d[key] = []
             elif v is None:
                 d[key] = []
+        d["auto_approve"] = bool(d.get("auto_approve"))
         d["deconfliction_tag"] = deconfliction_tag(d.get("id", ""))
         return d

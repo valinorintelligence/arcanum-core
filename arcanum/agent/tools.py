@@ -1957,10 +1957,205 @@ NATIVE_TOOLS: list[dict] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "map_service_to_exploits",
+            "description": "RED TEAM (F1, ACTIVE): Scan a target with nmap -sV, parse the services and correlate each to candidate CVEs from the local CVE knowledge base. Pure recon→CVE correlation (no attack). Feeds the knowledge graph. Use before exploit_webapp to pick a module/template. Requires the authorized sandbox (or pass nmap_output).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string", "description": "Authorized target (host/IP/domain) within the ROE scope."},
+                    "nmap_output": {"type": "string", "description": "Optional: existing 'nmap -sV' output to parse instead of scanning."},
+                    "cve_limit": {"type": "integer", "description": "Max CVE candidates per service (default 5)."},
+                },
+                "required": ["target"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "exploit_webapp",
+            "description": "RED TEAM (F1, EXPLOIT — requires authorized engagement + DUAL APPROVAL): Confirm access against an authorized target by DELEGATING to an established tool you choose (a Metasploit module, a nuclei template, or a raw command). The exploit is the tool's — this wrapper only orchestrates, parses the result, and on a real session registers a foothold + masked proof (on a confirmed vuln without a shell: proof only, no foothold). Nothing runs without the authorized sandbox. No exploit/payload ships in Arcanum.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string", "description": "Authorized target within the ROE scope."},
+                    "method": {"type": "string", "description": "Delegation method: 'metasploit' | 'nuclei' | 'command' (default 'command')."},
+                    "command": {"type": "string", "description": "For method='command': the exact command to run in the sandbox (operator-supplied)."},
+                    "module": {"type": "string", "description": "For method='metasploit': the Metasploit module path (e.g. 'exploit/...'). The module is Metasploit's; Arcanum only invokes it."},
+                    "options": {"type": "object", "description": "For metasploit: options like {RPORT, LHOST,...} (RHOSTS defaults to target). For nuclei: {id} or {template}."},
+                    "teardown_recipe": {"type": "array", "items": {"type": "string"}, "description": "Optional ordered cleanup commands to remove anything left behind (stored on the foothold for guaranteed cleanup)."},
+                },
+                "required": ["target"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "capture_proof",
+            "description": "RED TEAM (F1, PASSIVE): Standardize a piece of evidence (confirmed shell / command output / masked sample) into an auditable proof record. Scrubs inline credentials and stamps a sha256 of the original. Use to attach proof to a finding.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "proof_type": {"type": "string", "description": "shell | output | vuln_confirmation | sample (default 'output')."},
+                    "content": {"type": "string", "description": "The raw evidence text (will be masked for storage)."},
+                    "note": {"type": "string", "description": "Short human summary of what the proof demonstrates."},
+                    "deconfliction_tag": {"type": "string", "description": "Optional engagement deconfliction tag."},
+                },
+                "required": ["content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_on_target",
+            "description": "RED TEAM (F4, POST_EXPLOIT — dual approval): Run an operator-supplied command on a compromised host THROUGH an existing foothold and capture the output as proof. The reach (C2/session/netexec) is your command; Arcanum governs + records. Requires a registered foothold + authorized sandbox.",
+            "parameters": {"type": "object", "properties": {
+                "foothold_id": {"type": "string", "description": "Foothold id (from exploit_webapp/lateral_move)."},
+                "command": {"type": "string", "description": "Command to run on/against the compromised host (operator-supplied)."}},
+                "required": ["foothold_id", "command"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "enumerate_privesc",
+            "description": "RED TEAM (F4, POST_EXPLOIT): Enumerate privilege-escalation vectors on a foothold host by delegating to an established enumerator (linpeas/winpeas by default). Read-heavy; makes no change.",
+            "parameters": {"type": "object", "properties": {
+                "foothold_id": {"type": "string"},
+                "command": {"type": "string", "description": "Optional enumerator command (defaults to linpeas/winpeas by os_type)."},
+                "os_type": {"type": "string", "description": "'linux' or 'windows' (default linux)."}},
+                "required": ["foothold_id"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "attempt_privesc",
+            "description": "RED TEAM (F4, POST_EXPLOIT — dual approval): Attempt elevation by delegating an operator-chosen technique/command. On confirmed root/SYSTEM, raises the host's owned level in the graph.",
+            "parameters": {"type": "object", "properties": {
+                "foothold_id": {"type": "string"},
+                "command": {"type": "string", "description": "Elevation command delegated to the established tool/catalog."},
+                "kernel": {"type": "boolean", "description": "Kernel exploit (crash risk) — kept at the highest HITL tier."}},
+                "required": ["foothold_id", "command"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "dump_credentials",
+            "description": "RED TEAM (F4, POST_EXPLOIT — dual approval): Delegate a credential dump (impacket/mimikatz/…). Captured creds are stored MASKED in the graph and only a MASKED summary is returned — the raw secret is never persisted in the log/graph/result.",
+            "parameters": {"type": "object", "properties": {
+                "foothold_id": {"type": "string"},
+                "command": {"type": "string", "description": "Dump command delegated to the established tool."}},
+                "required": ["foothold_id", "command"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "crack_hashes",
+            "description": "RED TEAM (F4, ACTIVE): Delegate offline hash cracking to hashcat/john in the sandbox. Cracked results are stored MASKED; raw plaintext is not persisted.",
+            "parameters": {"type": "object", "properties": {
+                "command": {"type": "string", "description": "hashcat/john command (operator-supplied)."},
+                "for_host": {"type": "string", "description": "Optional host to associate cracked creds with."}},
+                "required": ["command"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "discover_on_host",
+            "description": "RED TEAM (F4, POST_EXPLOIT): Internal discovery from a foothold (network/accounts/shares). Output is ingested into the knowledge graph to expand the internal attack surface.",
+            "parameters": {"type": "object", "properties": {
+                "foothold_id": {"type": "string"},
+                "command": {"type": "string", "description": "Enumeration command delegated to the established tool."}},
+                "required": ["foothold_id", "command"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "lateral_move",
+            "description": "RED TEAM (F4, EXPLOIT — approval per hop): Move to another host by delegating to impacket/netexec/evil-winrm. On a confirmed session, registers a NEW child foothold + a 'pivoted_to' graph edge and marks the new host owned.",
+            "parameters": {"type": "object", "properties": {
+                "from_foothold_id": {"type": "string", "description": "Source foothold to pivot from."},
+                "target_host": {"type": "string", "description": "Target host to move to (in ROE scope)."},
+                "command": {"type": "string", "description": "Lateral-movement command (operator-supplied)."},
+                "teardown_recipe": {"type": "array", "items": {"type": "string"}, "description": "Cleanup commands for anything dropped on the new host."}},
+                "required": ["from_foothold_id", "target_host", "command"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "setup_pivot",
+            "description": "RED TEAM (F4, EXPLOIT): Set up a pivot/tunnel (chisel/ligolo) via a foothold. Registered as a reversible implant with a teardown recipe (kill-switch tears it down).",
+            "parameters": {"type": "object", "properties": {
+                "foothold_id": {"type": "string"},
+                "command": {"type": "string", "description": "Pivot/tunnel command (operator-supplied)."},
+                "teardown_recipe": {"type": "array", "items": {"type": "string"}}},
+                "required": ["foothold_id", "command"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "establish_c2",
+            "description": "RED TEAM (F4, POST_EXPLOIT — dual approval): Establish a C2 session/listener by delegating to sliver/pwncat. Registered as a reversible implant — listable via /api/redteam/sessions and killable by the kill-switch. Provide a teardown recipe.",
+            "parameters": {"type": "object", "properties": {
+                "host": {"type": "string"},
+                "command": {"type": "string", "description": "C2 framework command (operator-supplied)."},
+                "foothold_id": {"type": "string", "description": "Optional parent foothold."},
+                "teardown_recipe": {"type": "array", "items": {"type": "string"}}},
+                "required": ["host", "command"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "collect_sample",
+            "description": "RED TEAM (F5, POST_EXPLOIT): Collect a MINIMAL masked sample of one sensitive file as proof of access (hard-capped, masked). Not bulk collection.",
+            "parameters": {"type": "object", "properties": {
+                "foothold_id": {"type": "string"},
+                "command": {"type": "string", "description": "Read command for the single sensitive file."},
+                "max_bytes": {"type": "integer", "description": "Sample cap (hard max 4096)."}},
+                "required": ["foothold_id", "command"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "demo_exfiltration",
+            "description": "RED TEAM (F5, DESTRUCTIVE-adjacent — dual approval): A size/rate-LIMITED exfiltration to test DLP. Logs exactly what left; hard-capped. Never moves real bulk data.",
+            "parameters": {"type": "object", "properties": {
+                "foothold_id": {"type": "string"},
+                "command": {"type": "string", "description": "Exfil channel command (operator-supplied)."},
+                "destination": {"type": "string", "description": "Where the demo data goes (for the DLP-test log)."},
+                "max_bytes": {"type": "integer", "description": "Exfil cap (hard max 2048)."}},
+                "required": ["foothold_id", "command"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "impact_poc",
+            "description": "RED TEAM (F5, DESTRUCTIVE — OFF BY DEFAULT): A non-destructive-by-default impact PoC. REFUSES unless ARCANUM_ALLOW_DESTRUCTIVE_TESTING is enabled AND an isolated test_directory is given. Never runs destructive impact on production.",
+            "parameters": {"type": "object", "properties": {
+                "foothold_id": {"type": "string"},
+                "command": {"type": "string", "description": "Impact PoC command delegated to the established tool."},
+                "test_directory": {"type": "string", "description": "Isolated authorized test directory (required)."}},
+                "required": ["foothold_id", "command", "test_directory"]},
+        },
+    },
 ]
 
 RECON_TOOLS = {"execute", "audit_security_headers", "audit_dns_email_security", "scan_exposed_secrets", "audit_tls_ssl", "query_whois_rdap", "enrich_ip_intel", "search_historical_urls", "search_cert_transparency", "audit_well_known_security", "audit_cloud_storage", "audit_subdomain_takeover", "detect_waf_firewall", "audit_http_methods", "audit_rate_limiting", "audit_websocket_security", "audit_supply_chain_libs", "audit_graphql_security", "audit_oauth_sso", "audit_dnsbl_reputation", "audit_dkim_bimi", "query_threat_feeds", "audit_ssrf_cloud_metadata", "audit_prototype_pollution", "audit_waf_bypass_heuristics", "audit_saml_xml_security", "audit_web_cache_poisoning", "audit_mta_sts_dane", "audit_http_request_smuggling", "audit_ssti_injection", "audit_nosql_injection", "generate_subdomain_permutations", "audit_open_redirect_bypasses", "audit_dom_clobbering", "audit_grpc_api_security", "audit_s3_bucket_permissions_deep", "audit_git_and_env_leakage", "audit_content_security_policy_deep", "audit_dns_zone_transfer_and_nsec", "audit_smtp_open_relay_and_spoofing", "audit_ip_spoofing_access_controls", "audit_http3_quic_exposure", "audit_snmp_community_exposure", "audit_smb_signing_and_null_sessions", "audit_postmessage_messaging_security", "audit_http_parameter_pollution", "audit_clickjacking_and_ui_redressing", "audit_vector_database_exposure", "audit_subresource_integrity_sri", "audit_mtls_and_mesh_security", "dispatch_to_satellite_probe", "analyze_active_directory", "headless_web_audit", "evaluate_defensive_efficacy", "map_mitre_attack", "read_memory", "update_memory", "query_playbook", "save_playbook", "read_file", "web_search", "query_graph"}
-ANALYSIS_TOOLS = {"execute", "audit_security_headers", "audit_dns_email_security", "scan_exposed_secrets", "audit_tls_ssl", "audit_api_spec", "search_historical_urls", "search_cert_transparency", "enrich_cve_threat", "audit_well_known_security", "audit_cloud_storage", "audit_subdomain_takeover", "detect_waf_firewall", "audit_cors_advanced", "audit_http_methods", "map_mitre_attack", "generate_detection_rules", "audit_jwt_security", "audit_rate_limiting", "audit_websocket_security", "audit_supply_chain_libs", "audit_compliance_matrix", "generate_atomic_test", "simulate_attack_path", "audit_graphql_security", "audit_oauth_sso", "generate_ir_playbook", "audit_dnsbl_reputation", "generate_canary_tokens", "audit_ssrf_cloud_metadata", "calculate_cvss_vector", "audit_api_idor_matrix", "audit_prototype_pollution", "generate_hardening_baseline", "audit_dkim_bimi", "query_threat_feeds", "audit_waf_bypass_heuristics", "audit_sbom_dependencies", "audit_saml_xml_security", "generate_yara_rule", "audit_dockerfile_security", "audit_kubernetes_rbac", "calculate_breach_risk_cost", "audit_iac_misconfigurations", "audit_cicd_pipeline_security", "audit_web_cache_poisoning", "audit_api_mass_assignment", "audit_mta_sts_dane", "audit_identity_access_hygiene", "analyze_forensic_artifacts", "audit_binary_protections", "audit_http_request_smuggling", "audit_ssti_injection", "audit_nosql_injection", "generate_subdomain_permutations", "audit_ntlm_relay_coercion", "simulate_cloud_iam_privesc", "audit_race_conditions_concurrency", "audit_dom_clobbering", "audit_xxe_injection", "audit_open_redirect_bypasses", "audit_ldap_injection", "audit_grpc_api_security", "audit_insecure_deserialization", "audit_crlf_header_injection", "audit_reverse_proxy_path_traversal", "audit_s3_bucket_permissions_deep", "audit_git_and_env_leakage", "audit_content_security_policy_deep", "audit_api_excessive_data_exposure", "audit_dns_zone_transfer_and_nsec", "audit_smtp_open_relay_and_spoofing", "audit_server_side_prototype_pollution", "audit_ip_spoofing_access_controls", "audit_kerberos_delegation_risks", "audit_http3_quic_exposure", "audit_snmp_community_exposure", "audit_adcs_certificate_templates", "audit_smb_signing_and_null_sessions", "audit_postmessage_messaging_security", "audit_http_parameter_pollution", "audit_container_breakout_vectors", "audit_clickjacking_and_ui_redressing", "audit_bfla_api_authorization", "audit_kerberoasting_surface", "audit_linux_privesc_vectors", "audit_llm_prompt_injection_and_jailbreaks", "audit_vector_database_exposure", "audit_subresource_integrity_sri", "audit_dependency_confusion_and_namespaces", "audit_webhook_ssrf_and_dns_rebinding", "audit_ad_dacl_abuse_paths", "audit_windows_token_privileges", "audit_cicd_workflow_poisoning", "audit_mtls_and_mesh_security", "audit_ebpf_integrity_and_rootkits", "search_cve", "create_finding", "dispatch_enterprise_integration", "check_cisa_kev", "dispatch_to_satellite_probe", "analyze_active_directory", "headless_web_audit", "evaluate_defensive_efficacy", "deploy_detection_rule", "verify_detection_active", "apply_hardening", "ir_contain", "verify_detection", "measure_coverage", "read_memory", "update_memory", "query_playbook", "read_file", "web_search", "query_graph"}
+ANALYSIS_TOOLS = {"execute", "audit_security_headers", "audit_dns_email_security", "scan_exposed_secrets", "audit_tls_ssl", "audit_api_spec", "search_historical_urls", "search_cert_transparency", "enrich_cve_threat", "audit_well_known_security", "audit_cloud_storage", "audit_subdomain_takeover", "detect_waf_firewall", "audit_cors_advanced", "audit_http_methods", "map_mitre_attack", "generate_detection_rules", "audit_jwt_security", "audit_rate_limiting", "audit_websocket_security", "audit_supply_chain_libs", "audit_compliance_matrix", "generate_atomic_test", "simulate_attack_path", "audit_graphql_security", "audit_oauth_sso", "generate_ir_playbook", "audit_dnsbl_reputation", "generate_canary_tokens", "audit_ssrf_cloud_metadata", "calculate_cvss_vector", "audit_api_idor_matrix", "audit_prototype_pollution", "generate_hardening_baseline", "audit_dkim_bimi", "query_threat_feeds", "audit_waf_bypass_heuristics", "audit_sbom_dependencies", "audit_saml_xml_security", "generate_yara_rule", "audit_dockerfile_security", "audit_kubernetes_rbac", "calculate_breach_risk_cost", "audit_iac_misconfigurations", "audit_cicd_pipeline_security", "audit_web_cache_poisoning", "audit_api_mass_assignment", "audit_mta_sts_dane", "audit_identity_access_hygiene", "analyze_forensic_artifacts", "audit_binary_protections", "audit_http_request_smuggling", "audit_ssti_injection", "audit_nosql_injection", "generate_subdomain_permutations", "audit_ntlm_relay_coercion", "simulate_cloud_iam_privesc", "audit_race_conditions_concurrency", "audit_dom_clobbering", "audit_xxe_injection", "audit_open_redirect_bypasses", "audit_ldap_injection", "audit_grpc_api_security", "audit_insecure_deserialization", "audit_crlf_header_injection", "audit_reverse_proxy_path_traversal", "audit_s3_bucket_permissions_deep", "audit_git_and_env_leakage", "audit_content_security_policy_deep", "audit_api_excessive_data_exposure", "audit_dns_zone_transfer_and_nsec", "audit_smtp_open_relay_and_spoofing", "audit_server_side_prototype_pollution", "audit_ip_spoofing_access_controls", "audit_kerberos_delegation_risks", "audit_http3_quic_exposure", "audit_snmp_community_exposure", "audit_adcs_certificate_templates", "audit_smb_signing_and_null_sessions", "audit_postmessage_messaging_security", "audit_http_parameter_pollution", "audit_container_breakout_vectors", "audit_clickjacking_and_ui_redressing", "audit_bfla_api_authorization", "audit_kerberoasting_surface", "audit_linux_privesc_vectors", "audit_llm_prompt_injection_and_jailbreaks", "audit_vector_database_exposure", "audit_subresource_integrity_sri", "audit_dependency_confusion_and_namespaces", "audit_webhook_ssrf_and_dns_rebinding", "audit_ad_dacl_abuse_paths", "audit_windows_token_privileges", "audit_cicd_workflow_poisoning", "audit_mtls_and_mesh_security", "audit_ebpf_integrity_and_rootkits", "search_cve", "create_finding", "dispatch_enterprise_integration", "check_cisa_kev", "dispatch_to_satellite_probe", "analyze_active_directory", "headless_web_audit", "evaluate_defensive_efficacy", "deploy_detection_rule", "verify_detection_active", "apply_hardening", "ir_contain", "verify_detection", "measure_coverage", "map_service_to_exploits", "read_memory", "update_memory", "query_playbook", "read_file", "web_search", "query_graph"}
 
 
 REPORT_TOOLS = {
@@ -1974,6 +2169,12 @@ EXPLOIT_TOOLS = {
     "execute", "search_cve", "create_finding", "stash_artifact", "simulate_attack_path",
     "calculate_cvss_vector", "read_memory", "update_memory", "query_graph",
     "run_bas_test", "run_purple_campaign", "verify_detection", "measure_coverage",
+    # Offensive F1 (initial access): recon→CVE mapping, delegated exploitation, proof.
+    "map_service_to_exploits", "exploit_webapp", "capture_proof",
+    # Offensive F4 (post-exploitation & lateral) + F5 (collection/exfil/impact).
+    "run_on_target", "enumerate_privesc", "attempt_privesc", "dump_credentials",
+    "crack_hashes", "discover_on_host", "lateral_move", "setup_pivot", "establish_c2",
+    "collect_sample", "demo_exfiltration", "impact_poc",
 }
 
 
@@ -2289,6 +2490,21 @@ class ToolExecutor:
             "verify_detection": self._handle_verify_detection,
             "measure_coverage": self._handle_measure_coverage,
             "run_purple_campaign": self._handle_run_purple_campaign,
+            "map_service_to_exploits": self._handle_map_service_to_exploits,
+            "exploit_webapp": self._handle_exploit_webapp,
+            "capture_proof": self._handle_capture_proof,
+            "run_on_target": self._handle_run_on_target,
+            "enumerate_privesc": self._handle_enumerate_privesc,
+            "attempt_privesc": self._handle_attempt_privesc,
+            "dump_credentials": self._handle_dump_credentials,
+            "crack_hashes": self._handle_crack_hashes,
+            "discover_on_host": self._handle_discover_on_host,
+            "lateral_move": self._handle_lateral_move,
+            "setup_pivot": self._handle_setup_pivot,
+            "establish_c2": self._handle_establish_c2,
+            "collect_sample": self._handle_collect_sample,
+            "demo_exfiltration": self._handle_demo_exfiltration,
+            "impact_poc": self._handle_impact_poc,
             "audit_jwt_security": self._handle_audit_jwt_security,
             "audit_rate_limiting": self._handle_audit_rate_limiting,
             "audit_websocket_security": self._handle_audit_websocket_security,
@@ -5190,6 +5406,184 @@ class ToolExecutor:
         from ..core.config import get_config
         camp = PurpleCampaign(self.db, config=get_config(), sandbox=self.sandbox, session_id=self.session_id)
         return await camp.run(techniques, auto_tune=self._bool(auto_tune), campaign_id=campaign_id or None)
+
+    # -- Offensive F1 (initial access): governed wrappers --------------------
+    # These DELEGATE to established tools in the sandbox (no exploit in the repo).
+    # The engine classifies them via F0 (map=ACTIVE, exploit_webapp=EXPLOIT⇒dual
+    # approval) and enforces ROE + HITL + audit BEFORE the handler runs.
+
+    def _offensive_ctx(self, engagement_id=None):
+        from ..offensive.base import OffensiveContext
+        return OffensiveContext(executor=self, db=self.db, session_id=self.session_id,
+                                engagement_id=engagement_id)
+
+    async def _active_engagement_id(self):
+        if self.db is None:
+            return None
+        try:
+            from ..redteam.engagement import EngagementManager
+            eng = await EngagementManager(self.db).active_for(self.session_id)
+            return (eng or {}).get("id")
+        except Exception:
+            return None
+
+    async def _handle_map_service_to_exploits(
+        self, target: str = "", nmap_output: str = "", do_scan: bool = True,
+        cve_limit: int = 5, **kwargs,
+    ) -> dict:
+        """F1 (ACTIVE): nmap -sV → parse services → candidate CVEs from the local KB.
+        Pure recon→CVE correlation; no attack."""
+        if not target:
+            return {"error": "Parâmetro 'target' obrigatório."}
+        from ..offensive.access import map_service_to_exploits
+        ctx = self._offensive_ctx(await self._active_engagement_id())
+        return await map_service_to_exploits(
+            ctx, target, nmap_output=nmap_output or None,
+            do_scan=self._bool(do_scan), cve_limit=int(cve_limit or 5))
+
+    async def _handle_exploit_webapp(
+        self, target: str = "", method: str = "command", command: str = "",
+        module: str = "", options=None, teardown_recipe=None,
+        create_finding: bool = True, **kwargs,
+    ) -> dict:
+        """F1 (EXPLOIT, dual approval): DELEGATE access confirmation to an established
+        tool (operator-chosen Metasploit module / nuclei template / command). On a real
+        session → foothold + proof; on a confirmed vuln → proof only. No sandbox ⇒ refuse."""
+        if not target:
+            return {"error": "Parâmetro 'target' obrigatório (alvo autorizado do ROE)."}
+        if isinstance(options, str):
+            opts = {}
+            for pair in options.replace(";", ",").split(","):
+                if "=" in pair:
+                    k, v = pair.split("=", 1)
+                    opts[k.strip()] = v.strip()
+            options = opts
+        if isinstance(teardown_recipe, str):
+            teardown_recipe = [c.strip() for c in teardown_recipe.split(";") if c.strip()]
+        from ..offensive.access import exploit_webapp
+        ctx = self._offensive_ctx(await self._active_engagement_id())
+        res = await exploit_webapp(
+            ctx, target, method=method or "command", command=command or None,
+            module=module or None, options=options or None,
+            teardown_recipe=teardown_recipe or None)
+        if (self._bool(create_finding) and res.get("proof")
+                and (res.get("access_obtained") or res.get("vuln_confirmed"))):
+            try:
+                await self._finding_from_proof(target, res)
+            except Exception:
+                pass
+        return res
+
+    async def _finding_from_proof(self, target: str, res: dict) -> None:
+        access = bool(res.get("access_obtained"))
+        sig = (res.get("access_signal") or {}).get("signal", "")
+        title = (f"Acesso inicial obtido em {target}" if access
+                 else f"Vulnerabilidade explorável confirmada em {target}")
+        await self._handle_create_finding(
+            title=title,
+            type="initial_access" if access else "exploitable_vulnerability",
+            severity="critical" if access else "high",
+            cvss_score=9.8 if access else 8.1,
+            affected={"url": target, "tool": res.get("tool")},
+            evidence=res.get("proof", {}),
+            poc={"method": res.get("tool"), "signal": sig,
+                 "note": "Exploração delegada a ferramenta estabelecida sob ROE + dupla aprovação."},
+            remediation=("Corrija a vulnerabilidade explorada, rode retest e valide a "
+                         "detecção/prevenção (Purple). Rotacione segredos expostos."),
+        )
+
+    async def _handle_capture_proof(
+        self, proof_type: str = "output", content: str = "", note: str = "",
+        deconfliction_tag: str = "", **kwargs,
+    ) -> dict:
+        """F1 (PASSIVE): standardize evidence into a masked, hash-stamped proof record."""
+        from ..offensive.proof import build_proof
+        return build_proof(proof_type or "output", content or "",
+                           note=note or None, deconfliction_tag=deconfliction_tag or None)
+
+    # -- Offensive F4 (post-exploitation & lateral) + F5 (impact) ------------
+    # All governed by F0 (POST_EXPLOIT/EXPLOIT/DESTRUCTIVE ⇒ dual approval + ROE +
+    # audit before the handler runs). They operate THROUGH a foothold and DELEGATE to
+    # the established Kali tools; no exploit/technique ships in the repo.
+
+    @staticmethod
+    def _as_list(v):
+        if v is None:
+            return None
+        if isinstance(v, list):
+            return [str(x) for x in v if str(x).strip()]
+        return [c.strip() for c in str(v).split(";") if c.strip()]
+
+    async def _handle_run_on_target(self, foothold_id: str = "", command: str = "", **kwargs) -> dict:
+        from ..offensive.post_exploit import run_on_target
+        ctx = self._offensive_ctx(await self._active_engagement_id())
+        return await run_on_target(ctx, foothold_id, command)
+
+    async def _handle_enumerate_privesc(self, foothold_id: str = "", command: str = "",
+                                        os_type: str = "linux", **kwargs) -> dict:
+        from ..offensive.post_exploit import enumerate_privesc
+        ctx = self._offensive_ctx(await self._active_engagement_id())
+        return await enumerate_privesc(ctx, foothold_id, command=command, os_type=os_type)
+
+    async def _handle_attempt_privesc(self, foothold_id: str = "", command: str = "",
+                                      kernel: bool = False, **kwargs) -> dict:
+        from ..offensive.post_exploit import attempt_privesc
+        ctx = self._offensive_ctx(await self._active_engagement_id())
+        return await attempt_privesc(ctx, foothold_id, command, kernel=self._bool(kernel))
+
+    async def _handle_dump_credentials(self, foothold_id: str = "", command: str = "", **kwargs) -> dict:
+        from ..offensive.post_exploit import dump_credentials
+        ctx = self._offensive_ctx(await self._active_engagement_id())
+        return await dump_credentials(ctx, foothold_id, command)
+
+    async def _handle_crack_hashes(self, command: str = "", for_host: str = "", **kwargs) -> dict:
+        from ..offensive.post_exploit import crack_hashes
+        ctx = self._offensive_ctx(await self._active_engagement_id())
+        return await crack_hashes(ctx, command, for_host=for_host)
+
+    async def _handle_discover_on_host(self, foothold_id: str = "", command: str = "", **kwargs) -> dict:
+        from ..offensive.post_exploit import discover_on_host
+        ctx = self._offensive_ctx(await self._active_engagement_id())
+        return await discover_on_host(ctx, foothold_id, command)
+
+    async def _handle_lateral_move(self, from_foothold_id: str = "", target_host: str = "",
+                                   command: str = "", teardown_recipe=None, **kwargs) -> dict:
+        from ..offensive.post_exploit import lateral_move
+        ctx = self._offensive_ctx(await self._active_engagement_id())
+        return await lateral_move(ctx, from_foothold_id, target_host, command,
+                                  teardown_recipe=self._as_list(teardown_recipe))
+
+    async def _handle_setup_pivot(self, foothold_id: str = "", command: str = "",
+                                  teardown_recipe=None, **kwargs) -> dict:
+        from ..offensive.post_exploit import setup_pivot
+        ctx = self._offensive_ctx(await self._active_engagement_id())
+        return await setup_pivot(ctx, foothold_id, command, teardown_recipe=self._as_list(teardown_recipe))
+
+    async def _handle_establish_c2(self, host: str = "", command: str = "",
+                                   teardown_recipe=None, foothold_id: str = "", **kwargs) -> dict:
+        from ..offensive.post_exploit import establish_c2
+        ctx = self._offensive_ctx(await self._active_engagement_id())
+        return await establish_c2(ctx, host, command, teardown_recipe=self._as_list(teardown_recipe),
+                                  foothold_id=foothold_id or None)
+
+    async def _handle_collect_sample(self, foothold_id: str = "", command: str = "",
+                                     max_bytes: int = 4096, **kwargs) -> dict:
+        from ..offensive.impact import collect_sample
+        ctx = self._offensive_ctx(await self._active_engagement_id())
+        return await collect_sample(ctx, foothold_id, command, max_bytes=int(max_bytes or 4096))
+
+    async def _handle_demo_exfiltration(self, foothold_id: str = "", command: str = "",
+                                        destination: str = "", max_bytes: int = 2048, **kwargs) -> dict:
+        from ..offensive.impact import demo_exfiltration
+        ctx = self._offensive_ctx(await self._active_engagement_id())
+        return await demo_exfiltration(ctx, foothold_id, command, destination=destination,
+                                       max_bytes=int(max_bytes or 2048))
+
+    async def _handle_impact_poc(self, foothold_id: str = "", command: str = "",
+                                 test_directory: str = "", **kwargs) -> dict:
+        from ..offensive.impact import impact_poc
+        ctx = self._offensive_ctx(await self._active_engagement_id())
+        return await impact_poc(ctx, foothold_id, command, test_directory=test_directory)
 
     # -- Blue/Red Team: JWT Security Audit -----------------------------------
 

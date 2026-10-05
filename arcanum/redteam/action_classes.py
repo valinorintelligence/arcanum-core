@@ -85,6 +85,31 @@ TOOL_ACTION_CLASS: dict[str, ActionClass] = {
     "run_purple_campaign": ActionClass.EXPLOIT,
     "verify_detection": ActionClass.PASSIVE,
     "measure_coverage": ActionClass.PASSIVE,
+    # Offensive F1 (initial access):
+    #   - map_service_to_exploits actively scans the target (nmap -sV) then correlates
+    #     to CVEs — active probing, no attack ⇒ ACTIVE (operator approval).
+    #   - exploit_webapp delegates real exploitation to an established tool to gain
+    #     access ⇒ EXPLOIT (ROE + dual approval).
+    #   - capture_proof only formats/records evidence already obtained ⇒ PASSIVE.
+    "map_service_to_exploits": ActionClass.ACTIVE,
+    "exploit_webapp": ActionClass.EXPLOIT,
+    "capture_proof": ActionClass.PASSIVE,
+    # Offensive F4 (post-exploitation & lateral) — all operate through a foothold and
+    # delegate to established tools. POST_EXPLOIT/EXPLOIT ⇒ the engine requires dual
+    # approval (and ROE) before they run; crack_hashes is offline/local ⇒ ACTIVE.
+    "run_on_target": ActionClass.POST_EXPLOIT,
+    "enumerate_privesc": ActionClass.POST_EXPLOIT,
+    "attempt_privesc": ActionClass.POST_EXPLOIT,
+    "dump_credentials": ActionClass.POST_EXPLOIT,
+    "discover_on_host": ActionClass.POST_EXPLOIT,
+    "establish_c2": ActionClass.POST_EXPLOIT,
+    "lateral_move": ActionClass.EXPLOIT,          # per-hop approval
+    "setup_pivot": ActionClass.EXPLOIT,
+    "crack_hashes": ActionClass.ACTIVE,
+    # Offensive F5 (collection / exfil / impact) — maximum gate.
+    "collect_sample": ActionClass.POST_EXPLOIT,
+    "demo_exfiltration": ActionClass.DESTRUCTIVE,
+    "impact_poc": ActionClass.DESTRUCTIVE,
 }
 
 

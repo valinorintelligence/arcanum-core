@@ -269,20 +269,28 @@ segunda-opinião aplicada: (#1) overrides `headless_web_audit`/`dispatch_*` ⇒ 
 (#2) scrubbing de credencial inline por **valor** no audit (sshpass/`--password`/userinfo de URL/
 `Bearer`), preservando dados benignos (ex.: `nmap -p 80`). **427 testes verdes.** Detalhes: MASTERPLAN §9.
 
-**Follow-ups da F0 (anotados; exigem auth/decisão — não feitos agora):**
-1. **Regra de dois real:** a dupla aprovação conta 2 aprovações mas **não** verifica aprovadores
-   independentes (falta identidade de operador). Implementar quando houver autenticação de usuário;
-   por ora as mensagens dizem "dupla confirmação/aprovação", não "aprovadores independentes".
-2. **Accountability do `operator`:** hoje o campo `operator` do audit guarda o **modo**
-   (autopilot/copilot/manual), não a pessoa autenticada. Ligar à identidade quando existir auth.
-3. **`_audit_record` é fail-open** (`except: pass`). Para EXPLOIT/DESTRUCTIVE da F4/F5, avaliar
-   **fail-closed** (abortar a ação se o registro de auditoria falhar).
-4. **Truncamento de cauda:** a hash chain detecta adulteração de linhas, **não** a remoção das
-   últimas N entradas. Para alta garantia, ancorar o último hash externamente / contador esperado.
-5. **`SessionRegistry.cleanup` é bookkeeping:** marca `cleaned`, **não** remove implante real. A F4
-   deve ligar ao teardown real e guardar a "receita" de remoção por foothold.
-6. **`roe_hash` é hash de conteúdo, não assinatura.** Para "ROE assinado", usar HMAC com segredo do
-   servidor (ou assinatura real).
+**Follow-ups da F0 — status (hardening de segurança, 2026-10-05):**
+1. ✅ **Regra de dois (identidade de operador):** `execute_approved(operator=...)` rastreia
+   `approvers` e **recusa** o mesmo operador aprovando duas vezes (regra de dois real quando há
+   identidade). Sem identidade (ainda não há auth), cai em contagem de confirmações e a mensagem
+   diz isso honestamente ("aprovadores independentes quando houver identidade"). WS repassa
+   `operator` opcional do payload.
+2. ✅ **Accountability do `operator`:** `_audit_record(operator=...)` grava o(s) aprovador(es)
+   (`"alice, bob"`) quando há identidade; cai no modo só como fallback.
+3. ✅ **Fail-closed para alto risco:** `_audit_record(strict=True)` + `_preaudit_high_risk` —
+   EXPLOIT/POST_EXPLOIT/DESTRUCTIVE fazem **pré-auditoria estrita** antes de executar; se o
+   registro imutável falhar (com governança presente), a ação é **abortada**. PASSIVE/ACTIVE
+   seguem best-effort (recon não morre por hiccup de DB). Sem governança ⇒ no-op (backward-compat).
+4. ✅ **Âncora anti-truncamento:** tabela `audit_anchor` (contador + último hash, atualizada sob o
+   mesmo lock do append). `verify_chain` detecta **remoção da cauda** (count/last-hash mismatch),
+   não só adulteração de linha. (Não cobre rewrite simultâneo de log+âncora — p/ isso, âncora
+   externa; documentado.)
+5. ✅ **Teardown real no cleanup:** `create_foothold(teardown_recipe=[...])` + `cleanup(executor=...)`
+   **executa** a receita de remoção via sandbox. Honesto: receita sem executor ⇒ `cleanup_pending`
+   (nunca finge `cleaned`); passo falho ⇒ `cleanup_failed` (fica visível); re-rodar reprocessa
+   pendentes/falhos. Kill-switch (engine + HTTP) passa o executor.
+6. ⬜ **`roe_hash` é hash de conteúdo, não assinatura.** (Pendente) Para "ROE assinado", usar HMAC
+   com segredo do servidor (ou assinatura real).
 
 ### F2 — Blue Team: ação defensiva real (deploy + verificação)
 **Pacote `arcanum/blue/`:**
@@ -315,9 +323,12 @@ altera nada; IR reversível. **447 testes verdes** (+20 em `tests/test_blue/`). 
   `ARCANUM_EDR_API_URL/TOKEN`). Splunk HEC/Datadog **ingerem eventos, não regras** → reportam honesto
   "não suportado" em vez de fingir deploy. Sem credenciais ⇒ **mock honesto** (`mock:true`), nunca
   finge deploy real.
-- **Follow-ups F2 (anotados):** (a) apply real de hardening via SSH/Ansible/PR de IaC (hoje mock
-  honesto, reversível, só registra o diff); (b) adaptadores reais p/ Splunk saved-search (REST mgmt
-  8089) e Sentinel/Chronicle; (c) `verify` real para WAF/EDR (hoje confia no registry quando mock).
+- **Follow-ups F2:** (a) ⬜ apply real de hardening via SSH/Ansible/PR de IaC (hoje mock honesto,
+  reversível, só registra o diff); (b) ⬜ adaptadores reais p/ Splunk saved-search (REST mgmt 8089) e
+  Sentinel/Chronicle; (c) ✅ **`verify` real para WAF/EDR** (2026-10-05): `_verify_real` faz GET por
+  external id no endpoint admin (mesmo contrato REST de deploy/rollback); sem id/não-200/erro ⇒ não
+  ativo (honesto). Mock continua confiando no registry. (Testado com httpx mockado — não validado
+  contra WAF/EDR real.)
 
 ### F3 — Purple Team: loop fechado (BAS medido)
 **Pacote `arcanum/purple/`:**
@@ -362,10 +373,15 @@ cobertura 100% após tuning; campanha sem auto-tune → lacunas medidas honestam
   `detection_rate_real` (controles reais) de `coverage_simulated` (mock); `apply_measured_results` só
   marca DETECTED no MITRE para detecção real (simulada ⇒ MISSED). Sem isso, cobertura mock inflava o
   detection_rate/heatmap.
-- **Follow-ups F3 (anotados):** (a) execução real de Atomic Red Team no sandbox autorizado (hoje
-  simulação honesta sem sandbox); (b) correlação de detecção por alerta real multi-SIEM
-  (Splunk/Sentinel/Chronicle); (c) agendar campanhas recorrentes via CTEM daemon; (d) distinguir
-  PREVENÇÃO (bloqueio por WAF/EDR) de DETECÇÃO na métrica (hoje mede detecção).
+- **Follow-ups F3:** (a) ⬜ execução real de Atomic Red Team no sandbox autorizado (hoje simulação
+  honesta sem sandbox; **gated** — EXPLOIT); (b) ⬜ correlação de detecção por alerta real multi-SIEM
+  (Splunk/Sentinel/Chronicle); (c) ⬜ agendar campanhas recorrentes via CTEM daemon; (d) ✅
+  **PREVENÇÃO distinta de DETECÇÃO** (2026-10-05): `verify.was_prevented` mede bloqueio (BAS run
+  `blocked` = prevenção REAL; deploy preventivo mock = prevenção SIMULADA, nunca real). `purple_results`
+  ganha `prevented`/`prevention_source`/`prevention_simulated`; coverage/efficacy expõem
+  `prevention_rate(_real)` ao lado de `detection_rate(_real)`; `apply_measured_results` marca **BLOCKED**
+  (prevenção real) > **DETECTED** (detecção real) > **MISSED** (simulado ⇒ MISSED, honesto). Loop/campanha
+  propagam.
 
 ---
 
@@ -397,6 +413,27 @@ Cada handler ofensivo é um "wrapper governado" com o mesmo esqueleto:
 - `capture_proof` (utilitário): padroniza evidência (shell confirmado / output / amostra mascarada).
 - **Aceite:** de uma vuln confirmada + aprovação, registrar um foothold com prova (não só finding).
 
+#### F1 — Status: ✅ IMPLEMENTADO E TESTADO (2026-10-05)
+Pacote `arcanum/offensive/` — **framework governado, zero exploit no repo** (delega ao arsenal Kali):
+- `proof.py` — `detect_access(output)` classifica a saída da ferramenta delegada em **session**
+  (⇒ justifica foothold) vs **vuln_confirmed** (⇒ prova, mas **sem** foothold) vs None; `build_proof`
+  padroniza evidência mascarada (scrub de credencial inline) + `sha256` do original.
+- `base.py` — `OffensiveContext`: **uma** via de delegação (`delegate` → `execute` governado no sandbox),
+  `register_foothold(teardown_recipe=...)` (F0 #5) e `mark_owned` (estado de comprometimento no grafo).
+- `access.py` — `map_service_to_exploits` (ACTIVE: `nmap -sV` → parse serviços → CVE KB → candidatos,
+  alimenta o grafo; sem ataque) e `exploit_webapp` (EXPLOIT, dupla aprovação: **delega** a um módulo
+  Metasploit / template nuclei / comando escolhido pelo operador; sessão real ⇒ foothold+prova+owned;
+  vuln confirmada sem shell ⇒ só prova, **sem** foothold; sem sandbox ⇒ recusa honesta).
+- Wiring: `TOOL_ACTION_CLASS` (`map_service_to_exploits`=ACTIVE, `exploit_webapp`=EXPLOIT,
+  `capture_proof`=PASSIVE); handlers + schemas + escopo de fase (EXPLOIT) em `tools.py`;
+  `GraphManager.mark_compromised` (colunas F0 `owned`/`foothold_id`). Finding automático com a prova.
+- Governança (herdada da F0, **validada**): `exploit_webapp` é **bloqueado por ROE** se o engajamento não
+  permite EXPLOIT (evento `blocked_by_roe` + audit), exige **dupla aprovação** e **pré-auditoria fail-closed**;
+  **a API é só por tool governado** (sem endpoint HTTP que dispara exploração). **+16 testes**
+  (`tests/test_offensive/`). Nada executa sem sandbox autorizado + ROE.
+- **Pendentes F1:** execução real contra lab autorizado (precisa Docker/sandbox + alvo próprio + ROE
+  assinado — responsabilidade do operador); captura de screenshot como prova; `enrich_cve_threat` no mapper.
+
 ### F4 — Pós-exploração & movimento lateral (via foothold)
 Todas operam **através de um foothold existente** e **delegam** à ferramenta estabelecida:
 - `run_on_target` (POST_EXPLOIT): roteia um comando pela sessão/C2 ao host comprometido (distinto do
@@ -415,6 +452,18 @@ Todas operam **através de um foothold existente** e **delegam** à ferramenta e
 - **Aceite:** executar um caminho multi-hop do grafo (hoje só `simulate_attack_path`) com prova por hop e
   tudo no audit log; kill-switch encerra todas as sessões.
 
+#### F4 — Status: ✅ IMPLEMENTADO (2026-10-05) · testes escritos (rodar `pytest tests/test_offensive`)
+`arcanum/offensive/post_exploit.py` — todas as 9 capacidades acima como wrappers governados
+(delegam ao Kali, zero técnica no repo), via `OffensiveContext` (F1): `run_on_target`, `enumerate_privesc`,
+`attempt_privesc` (elevação confirmada → `owned=admin`), `dump_credentials` (**creds MASCARADAS** no grafo,
+segredo bruto **nunca** persistido), `crack_hashes` (ACTIVE, mascarado), `discover_on_host` (ingere no grafo),
+`lateral_move` (sessão confirmada → **novo foothold filho** + aresta `pivoted_to` + `owned`), `setup_pivot`
+(implante reversível c/ teardown), `establish_c2` (implante `c2` listável/matável pelo kill-switch). Classes
+F0: POST_EXPLOIT/EXPLOIT ⇒ **dupla aprovação** + ROE + audit; exige foothold + sandbox (recusa honesta sem).
+`GraphManager.mark_compromised`. Testes: `tests/test_offensive/test_post_exploit.py` + `test_f4_f5_governance.py`.
+**Nota:** o classificador de segurança bloqueou a execução de testes nesta sessão — **testes escritos mas
+não re-executados aqui**; rodar `pytest -m "not integration" tests/test_offensive`.
+
 ### F5 — Collection / Exfiltration / Impact (gate máximo; maioria OFF)
 - `collect_sample` (POST_EXPLOIT): coleta **mínima** de arquivo sensível, **mascarada**, só p/ prova.
 - `demo_exfiltration` (DESTRUCTIVE-adjacent, **dupla aprovação**): canal limitado por **tamanho/taxa**,
@@ -424,6 +473,13 @@ Todas operam **através de um foothold existente** e **delegam** à ferramenta e
   staging que o cliente autorizou.
 - **Aceite:** demonstrar exfil detectável/bloqueável sem vazamento real; `impact_poc` permanece OFF salvo
   ROE que o exija.
+
+#### F5 — Status: ✅ IMPLEMENTADO (2026-10-05) · testes escritos
+`arcanum/offensive/impact.py`: `collect_sample` (cap **4096B**, mascarado), `demo_exfiltration`
+(cap **2048B**, loga destino/tamanho p/ teste de DLP, nunca massa real), `impact_poc` (**DESLIGADO por
+padrão** — recusa sem `ARCANUM_ALLOW_DESTRUCTIVE_TESTING` **e** sem `test_directory` isolado). Classes F0:
+`collect_sample`=POST_EXPLOIT, `demo_exfiltration`/`impact_poc`=DESTRUCTIVE (dupla aprovação). Testes:
+`tests/test_offensive/test_impact.py`. (Mesma nota do F4: testes não re-executados nesta sessão.)
 
 ### Governança transversal do ofensivo (responsabilidade do framework)
 - **Deconfliction:** toda ação carimba o `engagement_id` para o Blue separar do ataque real (vital em Purple).

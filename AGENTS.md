@@ -110,6 +110,28 @@
 - **Kill-switch global.** `POST /api/redteam/killswitch` aborta todos os runs + `SessionRegistry.cleanup()`
   encerra todos os footholds/implantes; `engine.kill_switch()` faz o mesmo p/ um engajamento. Cleanup
   é **obrigatório** no encerramento.
+- **Audit fail-closed p/ alto risco (follow-up #3).** EXPLOIT/POST_EXPLOIT/DESTRUCTIVE passam por
+  `engine._preaudit_high_risk` → `_audit_record(strict=True)` ANTES de executar; se o registro imutável
+  falhar (com governança presente), a ação é **abortada**. PASSIVE/ACTIVE seguem best-effort (recon não
+  morre por hiccup de DB); **sem governança ⇒ no-op** (backward-compat). Nunca executar ofensiva sem auditoria.
+- **Regra de dois real + accountability (follow-up #1/#2).** `execute_approved(operator=...)` rastreia
+  `approvers` e **recusa** o mesmo operador aprovando 2×; `_audit_record(operator=...)` grava o(s)
+  aprovador(es). Sem identidade (ainda sem auth) ⇒ contagem de confirmações e a mensagem diz isso
+  honestamente — **não** alegar "aprovadores independentes" sem identidade.
+- **Âncora anti-truncamento (follow-up #4).** `audit_anchor` (count + último hash, atualizada sob o lock
+  do append) faz `verify_chain` detectar **remoção da cauda**, não só edição de linha. **Nunca**
+  `UPDATE/DELETE` em `actions_log` nem em `audit_anchor`.
+- **Teardown real no cleanup (follow-up #5).** `create_foothold(teardown_recipe=[...])` +
+  `SessionRegistry.cleanup(executor=...)` **executa** a remoção via sandbox. Honesto: receita sem executor
+  ⇒ `cleanup_pending` (nunca finge `cleaned`); passo falho ⇒ `cleanup_failed` (fica visível); re-rodar
+  reprocessa pendentes/falhos. Ao criar foothold em F1/F4, **sempre** registrar a `teardown_recipe`.
+- **Full-scope LAB ROE (`auto_approve`) — potência sem fricção, trilhos intactos.** Um engajamento com
+  `auto_approve=1` (crie via `EngagementManager.create_lab_preset` ou `POST /api/redteam/engagements/lab-preset`)
+  **pré-autoriza** suas classes permitidas: `engine._preauthorized` **dispensa a pausa HITL por ação** para
+  essas classes. **NÃO remove trilho:** `_roe_authorize` (escopo/janela/classe) continua valendo, tudo é
+  auditado (`decision="executed_preauthorized"`), deconflictado e reversível; **escopo é OBRIGATÓRIO** no preset
+  (nunca full-scope sem escopo); e **DESTRUCTIVE só é pré-autorizado com `allow_destructive_testing`**. É o
+  caminho legítimo de "sem travas" para o lab do próprio operador — não existe modo que desligue ROE/audit/cleanup.
 - **Ofensivo (F1/F4/F5) só com alvo autorizado + ROE assinado.** Não implementar wrappers ofensivos
   sem lab autorizado próprio, Docker/sandbox ligados e decisão de HITL/modelo (ver ROADMAP §6/§11).
 
@@ -127,6 +149,10 @@
 - **Classes F0 das tools Blue:** `deploy_detection_rule`/`apply_hardening`/`ir_contain` = **ACTIVE**
   (aprovação + audit + rollback); `verify_detection_active` = **PASSIVE**. Registradas em
   `TOOL_ACTION_CLASS` (override vence prefixo).
+- **`verify` real para WAF/EDR (follow-up F2 (c)).** `_verify_real` faz GET por `external_id` no
+  endpoint admin (mesmo contrato REST de deploy/rollback: `/rules/{id}`, `/detections/{id}`); sem
+  id/não-200/erro ⇒ **não ativo** (honesto, nunca confia cego). Mock continua confiando no registry.
+  *(Testado com httpx mockado — não validado contra WAF/EDR real.)*
 
 ### Purple Team (F3 — `arcanum/purple/`)
 - **Eficácia é MEDIDA, não seed.** O loop grava cada run+veredito em `purple_results`
@@ -144,9 +170,41 @@
 - **BAS não finge execução.** `BASRunner` executa no sandbox autorizado OU **simula honestamente**
   (`execution_status='simulated'`) sem sandbox — nunca alega execução real nem cria artefatos falsos.
   Toda execução carimba **deconfliction tag** (`ARCANUM-BAS:<camp>:<tid>`).
+- **PREVENÇÃO ≠ DETECÇÃO (follow-up F3 (d)).** `DetectionVerifier.was_prevented` mede **bloqueio**:
+  BAS run `execution_status='blocked'` ⇒ prevenção **REAL** (`source='bas_blocked'`); controle
+  preventivo mock (WAF/EDR/firewall/IR/hardening) cobrindo a técnica ⇒ prevenção **SIMULADA**
+  (`deployed_control_simulated`), nunca real; real vence mock. `purple_results` tem
+  `prevented`/`prevention_source`/`prevention_simulated`; coverage/efficacy expõem `prevention_rate(_real)`
+  ao lado de `detection_rate(_real)`; `apply_measured_results` mapeia **BLOCKED** (prevenção real) >
+  **DETECTED** (detecção real) > **MISSED** (simulado ⇒ MISSED). Ao tocar verify/efficacy/loop/campaign,
+  preserve os dois eixos (prevenção/detecção) e a separação real-vs-simulado.
 - **Emulação é EXPLOIT (gated).** `run_bas_test`/`run_purple_campaign` = EXPLOIT (ROE + dupla
   aprovação); `verify_detection`/`measure_coverage` = PASSIVE. A API Purple é **read-only** — execução
   só pelos tools governados (nunca um endpoint HTTP dispara emulação).
+
+### Ofensivo F1 (`arcanum/offensive/`) — acesso inicial, framework governado
+- **ZERO exploit/payload no repo.** `arcanum/offensive/` é só **orquestração + governança**: delega a
+  técnica às ferramentas estabelecidas do Kali (Metasploit/nuclei/comando escolhido pelo operador). Ao
+  adicionar capacidade ofensiva, **nunca** embutir exploit/payload/evasão aqui — só o wrapper governado.
+- **Uma via de delegação.** `OffensiveContext.delegate` roda o comando (do operador/ferramenta) no
+  **sandbox via `execute` governado** — único ponto que toca o alvo. Sem sandbox ⇒ **recusa honesta**.
+- **Foothold só com prova real.** `proof.detect_access` separa **session** (shell/sessão ⇒ registra
+  foothold) de **vuln_confirmed** (só prova, **sem** foothold) — nunca assume acesso. `build_proof`
+  mascara credencial inline e carimba `sha256` do original.
+- **Classes F0:** `map_service_to_exploits`=**ACTIVE** (nmap→CVE, sem ataque), `exploit_webapp`=**EXPLOIT**
+  (ROE + **dupla aprovação** + pré-auditoria fail-closed), `capture_proof`=**PASSIVE**. `exploit_webapp`
+  é bloqueado por ROE se o engajamento não permite EXPLOIT. **Execução só por tool governado — nenhum
+  endpoint HTTP dispara exploração.**
+- **Estado + cleanup:** sucesso ⇒ `register_foothold(teardown_recipe=...)` + `GraphManager.mark_compromised`
+  (`owned`/`foothold_id`); o foothold já entra no kill-switch/cleanup real (F0 #5). Finding automático com
+  a prova como evidência. **Nada roda sem sandbox autorizado + ROE** (lab próprio — responsabilidade do operador).
+- **F4/F5 (`post_exploit.py`, `impact.py`) seguem o MESMO contrato:** operam **através de um foothold**
+  registrado, delegam ao Kali, capturam prova, atualizam estado (novo foothold em `lateral_move`, `owned`
+  em `attempt_privesc`, **creds MASCARADAS** em `dump_credentials`/`crack_hashes` — segredo bruto **nunca**
+  persistido), implantes reversíveis (`setup_pivot`/`establish_c2`) com teardown. Classes: POST_EXPLOIT/
+  EXPLOIT/DESTRUCTIVE ⇒ **dupla aprovação**. **`impact_poc` é OFF por padrão** (exige
+  `allow_destructive_testing` + `test_directory` isolado); `collect_sample`/`demo_exfiltration` têm **caps
+  rígidos** (4096B/2048B). Ao estender o ofensivo, nunca contornar esses gates nem persistir segredo em claro.
 
 ### Estado (ver MASTERPLAN §9)
 P0 ✅, P1 ✅ (exceto TUI), P2 ✅ (valor). Lentidão/freeze: mitigado (flash-attn+KV q8 no Ollama,
@@ -158,5 +216,12 @@ P0 ✅, P1 ✅ (exceto TUI), P2 ✅ (valor). Lentidão/freeze: mitigado (flash-a
 **F2 ✅** (Blue real: deploy/verify/rollback, hardening dry-run, IR reversível) + **F3 ✅** (Purple
 loop fechado: BAS medido → detectar → tunar → re-medir, eficácia medida ≠ seed) implementadas e
 validadas ao vivo (ROADMAP §10; seções "Governança de ação (F0)", "Blue Team (F2)" e "Purple Team
-(F3)" acima). **463 testes verdes.** Ofensivo (F1/F4/F5) **não** implementado (gated — exige alvo
-autorizado + ROE + Docker/sandbox + decisão de HITL/modelo).
+(F3)" acima). **501 testes verdes** (até F1; F4/F5 com testes escritos mas não re-executados na sessão
+do classificador — rodar `pytest tests/test_offensive`). **Ofensivo F1+F4+F5 ✅ implementados** (framework
+governado `arcanum/offensive/`, delega ao Kali, gated por ROE/dupla aprovação; `impact_poc` OFF por padrão).
+Execução real exige lab autorizado + Docker/sandbox + ROE (operador).
+**Hardening de segurança (2026-10-05):** follow-ups F0 #1–#5 resolvidos (fail-closed audit, regra de
+dois com identidade, âncora anti-truncamento, teardown real no cleanup) + F2 (c) verify real WAF/EDR +
+F3 (d) prevenção≠detecção. **F1 ✅** (2026-10-05, `arcanum/offensive/`). Pendentes: F0 #6
+(roe_hash→HMAC assinado), F2 (a)/(b) (apply SSH, Splunk/Sentinel reais), F3 (a)/(b)/(c) (Atomic Red
+Team real [gated], multi-SIEM, agendamento CTEM), **F4/F5** (pós-exploração/impacto — gated).

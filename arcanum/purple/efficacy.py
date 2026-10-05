@@ -28,6 +28,9 @@ def measured_efficacy_report(results: list[dict]) -> dict:
     detected = [t for t in executed if t.get("detected") is True]
     detected_real = [t for t in detected if not t.get("detection_simulated")]
     detected_sim = [t for t in detected if t.get("detection_simulated")]
+    prevented = [t for t in executed if t.get("prevented") is True]
+    prevented_real = [t for t in prevented if not t.get("prevention_simulated")]
+    prevented_sim = [t for t in prevented if t.get("prevention_simulated")]
     missed = [t for t in executed if t.get("detected") is False]
     ne = len(executed)
     return {
@@ -37,9 +40,14 @@ def measured_efficacy_report(results: list[dict]) -> dict:
         "detected": len(detected),                 # total (real + simulated)
         "detected_real": len(detected_real),
         "detected_simulated": len(detected_sim),
+        "prevented": len(prevented),               # BLOCKED, distinct from detected
+        "prevented_real": len(prevented_real),
+        "prevented_simulated": len(prevented_sim),
         "missed": len(missed),
         "detection_rate": round((len(detected) / ne) * 100.0, 1) if ne else 0.0,
         "detection_rate_real": round((len(detected_real) / ne) * 100.0, 1) if ne else 0.0,
+        "prevention_rate": round((len(prevented) / ne) * 100.0, 1) if ne else 0.0,
+        "prevention_rate_real": round((len(prevented_real) / ne) * 100.0, 1) if ne else 0.0,
         "coverage_simulated": round((len(detected_sim) / ne) * 100.0, 1) if ne else 0.0,
         "gaps": [t["technique_id"] for t in missed],
         # Techniques "covered" only by a mock deploy are still real gaps.
@@ -50,38 +58,46 @@ def measured_efficacy_report(results: list[dict]) -> dict:
 def apply_measured_results(engine: Any, results: list[dict]) -> dict:
     """Feed measured verdicts into a MitreEfficacyEngine (measured > seed).
 
-    DETECTED only for REAL detection; a simulated-only detection is recorded as
-    MISSED with a clear log (the real control did not confirm it). Returns
-    {applied, unknown, simulated}.
+    Precedence per technique: **BLOCKED** (real prevention) > **DETECTED** (real
+    detection) > **MISSED**. A simulated-only prevention or detection (mock deploy,
+    no real control) is recorded as MISSED with a clear log — simulated never counts
+    as a real control outcome. Returns {applied, unknown, simulated, prevented}.
     """
     try:
         from ..mitre.models import DefenseStatus
     except Exception:
-        return {"applied": 0, "unknown": 0, "simulated": 0}
+        return {"applied": 0, "unknown": 0, "simulated": 0, "prevented": 0}
 
     latest: dict[str, dict] = {}
     for r in sorted(results, key=lambda x: x.get("created_at", "")):
         latest[r["technique_id"]] = r
 
-    applied = unknown = simulated = 0
+    applied = unknown = simulated = prevented = 0
     for tid, r in latest.items():
         if not r.get("executed"):
             continue
+        real_prevented = r.get("prevented") is True and not r.get("prevention_simulated")
         real_detected = r.get("detected") is True and not r.get("detection_simulated")
-        if real_detected:
+        if real_prevented:
+            status = DefenseStatus.BLOCKED
+            prevented += 1
+            log = f"Medido via BAS — PREVENÇÃO REAL / bloqueado (fonte: {r.get('prevention_source')})."
+        elif real_detected:
             status = DefenseStatus.DETECTED
             log = f"Medido via BAS — detecção REAL (fonte: {r.get('detection_source')})."
         else:
             status = DefenseStatus.MISSED
-            if r.get("detected") and r.get("detection_simulated"):
+            sim_prev = r.get("prevented") and r.get("prevention_simulated")
+            sim_det = r.get("detected") and r.get("detection_simulated")
+            if sim_prev or sim_det:
                 simulated += 1
                 log = ("Medido via BAS — cobertura SIMULADA (deploy mock, sem controle real); "
-                       "conta como LACUNA até implantar em um SIEM/controle real.")
+                       "conta como LACUNA até implantar em um controle real.")
             else:
-                log = "Medido via BAS — não detectado (lacuna)."
+                log = "Medido via BAS — não detectado nem prevenido (lacuna)."
         updated = engine.evaluate_technique(technique_id=tid, status=status, execution_log=log)
         if updated:
             applied += 1
         else:
             unknown += 1
-    return {"applied": applied, "unknown": unknown, "simulated": simulated}
+    return {"applied": applied, "unknown": unknown, "simulated": simulated, "prevented": prevented}

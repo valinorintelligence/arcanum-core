@@ -47,6 +47,19 @@ class WAFDeployer(BaseDeployer):
                 raise RuntimeError(f"WAF admin API {resp.status_code}: {resp.text[:300]}")
             return (resp.json() or {}).get("id") or body["name"]
 
+    async def _verify_real(self, rec: dict) -> bool:
+        """Confirm the rule is still present on the live WAF (follow-up F2 (c)):
+        GET the rule by its external id instead of trusting the registry. No
+        external id, a non-200, or a transport error ⇒ not active (honest)."""
+        url, token = self._admin()
+        ext = rec.get("external_id")
+        if not ext:
+            return False
+        headers = {"Authorization": f"Bearer {token}"}
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(f"{url.rstrip('/')}/rules/{ext}", headers=headers)
+            return resp.status_code == 200
+
     async def _rollback_real(self, rec: dict) -> None:
         url, token = self._admin()
         ext = rec.get("external_id")

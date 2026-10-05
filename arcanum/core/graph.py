@@ -285,6 +285,25 @@ class GraphManager:
         except Exception:
             pass
 
+    async def mark_compromised(self, session_id: str, host: str, owned: str = "user",
+                               creds_held=None, foothold_id: str | None = None) -> str:
+        """Record compromise state on a host node (F1+): access level (``owned``),
+        a registered foothold id, and/or held credentials (masked). Upserts the host
+        node and sets the F0 state columns. Returns the node id."""
+        h = re.sub(r"^https?://", "", str(host)).split("/")[0].split(":")[0]
+        nid = await self.add_node(session_id, HOST, h)
+        sets, params = ["owned = ?"], [owned]
+        if foothold_id is not None:
+            sets.append("foothold_id = ?")
+            params.append(foothold_id)
+        if creds_held is not None:
+            sets.append("creds_held = ?")
+            params.append(creds_held if isinstance(creds_held, str) else json.dumps(creds_held))
+        params.append(nid)
+        await self.db.execute(
+            f"UPDATE graph_nodes SET {', '.join(sets)} WHERE id = ?", tuple(params))
+        return nid
+
     async def candidate_findings(self, session_id: str) -> list[dict]:
         """Derive candidate findings from the graph (exposed sensitive services).
         Deterministic, conservative — for operator review, not auto-confirmed."""

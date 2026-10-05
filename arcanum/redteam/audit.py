@@ -141,6 +141,30 @@ class ActionAuditLog:
             "SELECT entry_hash FROM actions_log ORDER BY id DESC LIMIT 1")
         return (row or {}).get("entry_hash") or ""
 
+    async def _bump_anchor(self, entry_hash: str) -> None:
+        """Advance the tamper anchor (count+1, last_hash) under the append lock
+        (follow-up #4). Best-effort: if the anchor table is absent (older DB not
+        yet migrated) the anchor is simply not maintained, and verify_chain treats
+        a missing anchor as 'not configured' (chain-only verification)."""
+        try:
+            row = await self.db.fetch_one("SELECT entry_count FROM audit_anchor WHERE id = 1")
+            now = datetime.now(timezone.utc).isoformat()
+            if row is None:
+                # Initialize from the real row count so an upgraded DB with existing
+                # rows gets a correct starting count (the row just inserted included).
+                cnt_row = await self.db.fetch_one("SELECT COUNT(*) AS n FROM actions_log")
+                count = int((cnt_row or {}).get("n") or 0)
+                await self.db.execute(
+                    "INSERT INTO audit_anchor (id, entry_count, last_hash, updated_at) "
+                    "VALUES (1, ?, ?, ?)", (count, entry_hash, now))
+            else:
+                await self.db.execute(
+                    "UPDATE audit_anchor SET entry_count = entry_count + 1, "
+                    "last_hash = ?, updated_at = ? WHERE id = 1", (entry_hash, now))
+        except Exception:
+            # The anchor is an extra guarantee; never let it block the real audit write.
+            pass
+
     async def record(
         self,
         *,
@@ -192,6 +216,7 @@ class ActionAuditLog:
                     prev_hash, entry_hash, payload, ts,
                 ),
             )
+            await self._bump_anchor(entry_hash)
         return {
             "id": getattr(cur, "lastrowid", None),
             "entry_hash": entry_hash,
@@ -241,4 +266,23 @@ class ActionAuditLog:
             if r.get("prev_hash") != prev or r.get("entry_hash") != expected:
                 return {"valid": False, "length": len(rows), "broken_at": r.get("id")}
             prev = r.get("entry_hash") or ""
+        # Tail-truncation check via the anchor (follow-up #4): the per-row chain is
+        # intact, but the anchor records how many entries there SHOULD be and the
+        # last hash — so deleting the tail (which leaves a still-consistent shorter
+        # chain) is caught here as a count/last-hash mismatch.
+        try:
+            anchor = await self.db.fetch_one(
+                "SELECT entry_count, last_hash FROM audit_anchor WHERE id = 1")
+        except Exception:
+            anchor = None
+        if anchor is not None:
+            exp_count = int(anchor.get("entry_count") or 0)
+            exp_last = anchor.get("last_hash") or ""
+            cur_last = (rows[-1].get("entry_hash") if rows else "") or ""
+            if exp_count != len(rows) or exp_last != cur_last:
+                return {
+                    "valid": False, "length": len(rows), "broken_at": "anchor",
+                    "reason": "tail_truncation_or_anchor_mismatch",
+                    "expected_count": exp_count, "actual_count": len(rows),
+                }
         return {"valid": True, "length": len(rows), "broken_at": None}

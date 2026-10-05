@@ -16,6 +16,14 @@ never a simulated signal painted as real:
 
 If nothing covers the technique, the verdict is MISS (``detected=False``), not
 unknown. This is the invariant from AGENTS §5: never report simulated as real.
+
+PREVENTION vs DETECTION (F3 (d)): detection means an alert/log fired; **prevention**
+means the attack was BLOCKED by a control (WAF/EDR/firewall/IR/hardening). They are
+measured separately — :meth:`DetectionVerifier.was_prevented` — and map to the
+distinct MITRE statuses BLOCKED (prevented) vs DETECTED. Real prevention comes from
+a BAS run that was actually blocked (``execution_status='blocked'``); a mock
+preventive deployment is SIMULATED prevention (never counted as real), same honesty
+rule as detection.
 """
 from __future__ import annotations
 
@@ -23,6 +31,11 @@ import json
 from typing import Any
 
 from ..blue.registry import DeploymentRegistry
+
+# Deployed controls that BLOCK (prevent) rather than merely alert. Used only for the
+# SIMULATED prevention signal; real prevention is the BAS run being blocked.
+_PREVENTIVE_SYSTEMS = {"waf", "edr", "firewall"}
+_PREVENTIVE_KINDS = {"ir_action", "hardening"}
 
 
 class DetectionVerifier:
@@ -63,6 +76,48 @@ class DetectionVerifier:
         # 3) No coverage → honest MISS.
         return {"detected": False, "source": "none", "simulated": False,
                 "technique_id": technique_id}
+
+    async def was_prevented(self, technique_id: str, run: dict | None = None) -> dict:
+        """Was the technique BLOCKED (prevented), as opposed to merely detected?
+
+        Real prevention (``simulated=False``) comes only from a BAS run that was
+        actually blocked by a control (``execution_status='blocked'``). A mock
+        preventive deployment covering the technique is SIMULATED prevention
+        (``simulated=True``) — coverage that must NOT count as real prevention.
+        Returns ``{prevented, source, simulated, technique_id}``."""
+        # 1) Ground truth: the attack run was blocked at execution time.
+        if run and run.get("execution_status") == "blocked":
+            return {"prevented": True, "source": "bas_blocked", "simulated": False,
+                    "technique_id": technique_id}
+        # 2) An active deployed PREVENTIVE control covering the technique. A real
+        #    control wins over a mock one; a mock-only match is SIMULATED prevention.
+        deployments = await self.registry.list(status="active")
+        mock_match = None
+        for d in deployments:
+            if self._is_preventive(d) and self._covers(d, technique_id):
+                if not d.get("mock"):
+                    return {"prevented": True, "source": "deployed_control",
+                            "simulated": False, "technique_id": technique_id,
+                            "deployment_id": d["id"]}
+                if mock_match is None:
+                    mock_match = d
+        if mock_match is not None:
+            return {"prevented": True, "source": "deployed_control_simulated",
+                    "simulated": True, "technique_id": technique_id,
+                    "deployment_id": mock_match["id"]}
+        return {"prevented": False, "source": "none", "simulated": False,
+                "technique_id": technique_id}
+
+    @staticmethod
+    def _is_preventive(deployment: dict) -> bool:
+        """A deployment that BLOCKS rather than only alerts: IR/hardening actions,
+        or a detection rule deployed to a blocking control (WAF/EDR/firewall)."""
+        kind = (deployment.get("kind") or "").lower()
+        if kind in _PREVENTIVE_KINDS:
+            return True
+        if kind == "detection_rule":
+            return (deployment.get("target_system") or "").lower() in _PREVENTIVE_SYSTEMS
+        return False
 
     @staticmethod
     def _covers(deployment: dict, technique_id: str) -> bool:

@@ -31,6 +31,9 @@ class PurpleResultStore:
         detected: bool | None = None,
         detection_source: str | None = None,
         detection_simulated: bool = False,
+        prevented: bool | None = None,
+        prevention_source: str | None = None,
+        prevention_simulated: bool = False,
         tuned: bool = False,
         deployment_id: str | None = None,
         session_id: str | None = None,
@@ -41,12 +44,15 @@ class PurpleResultStore:
             """INSERT INTO purple_results
                (id, campaign_id, technique_id, tactic, deconfliction_tag, executed,
                 execution_status, detected, detection_source, detection_simulated,
+                prevented, prevention_source, prevention_simulated,
                 tuned, deployment_id, session_id, engagement_id, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (rid, campaign_id, technique_id, tactic, deconfliction_tag,
              1 if executed else 0, execution_status,
              (None if detected is None else (1 if detected else 0)),
              detection_source, 1 if detection_simulated else 0,
+             (None if prevented is None else (1 if prevented else 0)),
+             prevention_source, 1 if prevention_simulated else 0,
              1 if tuned else 0, deployment_id,
              session_id, engagement_id, _now()),
         )
@@ -82,6 +88,10 @@ class PurpleResultStore:
         detected = [t for t in executed if t["detected"] is True]
         detected_real = [t for t in detected if not t.get("detection_simulated")]
         detected_sim = [t for t in detected if t.get("detection_simulated")]
+        # Prevention (BLOCKED) is measured and reported separately from detection.
+        prevented = [t for t in executed if t.get("prevented") is True]
+        prevented_real = [t for t in prevented if not t.get("prevention_simulated")]
+        prevented_sim = [t for t in prevented if t.get("prevention_simulated")]
         missed = [t for t in executed if t["detected"] is False]
         total = len(techniques)
         ne = len(executed)
@@ -94,9 +104,14 @@ class PurpleResultStore:
             "detected": len(detected),
             "detected_real": len(detected_real),
             "detected_simulated": len(detected_sim),
+            "prevented": len(prevented),
+            "prevented_real": len(prevented_real),
+            "prevented_simulated": len(prevented_sim),
             "missed": len(missed),
             "coverage_percent": pct,
             "coverage_percent_real": pct_real,
+            "prevention_percent": round((len(prevented) / ne) * 100.0, 1) if ne else 0.0,
+            "prevention_percent_real": round((len(prevented_real) / ne) * 100.0, 1) if ne else 0.0,
             "simulated_coverage": len(detected_sim) > 0 and len(detected_real) < len(detected),
             "gaps": [t["technique_id"] for t in missed],
             "simulated_gaps": [t["technique_id"] for t in detected_sim],
@@ -109,6 +124,9 @@ class PurpleResultStore:
         d["executed"] = bool(d.get("executed"))
         d["tuned"] = bool(d.get("tuned"))
         d["detection_simulated"] = bool(d.get("detection_simulated"))
+        d["prevention_simulated"] = bool(d.get("prevention_simulated"))
         det = d.get("detected")
         d["detected"] = None if det is None else bool(det)
+        prev = d.get("prevented")
+        d["prevented"] = None if prev is None else bool(prev)
         return d

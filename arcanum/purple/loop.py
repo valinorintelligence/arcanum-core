@@ -60,17 +60,26 @@ class PurpleLoop:
         tag = run.get("deconfliction_tag")
 
         before = await self.verifier.was_detected(technique_id, tag=tag)
+        before_prev = await self.verifier.was_prevented(technique_id, run=run)
         await self.store.record(
             campaign_id=campaign_id, technique_id=technique_id, tactic=tactic,
             deconfliction_tag=tag, executed=run.get("executed", False),
             execution_status=run.get("execution_status", "simulated"),
             detected=before.get("detected"), detection_source=before.get("source"),
             detection_simulated=before.get("simulated", False),
+            prevented=before_prev.get("prevented"), prevention_source=before_prev.get("source"),
+            prevention_simulated=before_prev.get("simulated", False),
             tuned=False, session_id=self.session_id, engagement_id=self.engagement_id)
 
         result = {"campaign_id": campaign_id, "technique_id": technique_id,
-                  "execution": run, "before": before, "tuned": False}
+                  "execution": run, "before": before, "before_prevention": before_prev,
+                  "tuned": False}
 
+        # Prevention (BLOCKED) wins over detection; either means the technique is
+        # already covered — no need to tune a detection rule.
+        if before_prev.get("prevented"):
+            result["status"] = "prevented_simulated" if before_prev.get("simulated") else "prevented"
+            return result
         if before.get("detected"):
             result["status"] = "detected"
             return result
@@ -86,12 +95,15 @@ class PurpleLoop:
         deployment = await deployer.deploy(rule)
 
         after = await self.verifier.was_detected(technique_id, tag=tag)
+        after_prev = await self.verifier.was_prevented(technique_id, run=run)
         await self.store.record(
             campaign_id=campaign_id, technique_id=technique_id, tactic=tactic,
             deconfliction_tag=tag, executed=run.get("executed", False),
             execution_status=run.get("execution_status", "simulated"),
             detected=after.get("detected"), detection_source=after.get("source"),
             detection_simulated=after.get("simulated", False),
+            prevented=after_prev.get("prevented"), prevention_source=after_prev.get("source"),
+            prevention_simulated=after_prev.get("simulated", False),
             tuned=True, deployment_id=deployment.get("id"),
             session_id=self.session_id, engagement_id=self.engagement_id)
 
@@ -103,6 +115,7 @@ class PurpleLoop:
             "tuned": True,
             "deployment": deployment,
             "after": after,
+            "after_prevention": after_prev,
             "status": status,
         })
         return result

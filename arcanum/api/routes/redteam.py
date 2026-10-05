@@ -30,6 +30,17 @@ class CreateEngagementRequest(BaseModel):
     window_end: str | None = None
     session_id: str | None = None
     operator: str | None = None
+    auto_approve: bool = False
+
+
+class LabPresetRequest(BaseModel):
+    name: str
+    scope: list[str]                 # REQUIRED — the operator's own authorized lab
+    window_start: str | None = None
+    window_end: str | None = None
+    session_id: str | None = None
+    operator: str | None = None
+    include_destructive: bool = False  # DESTRUCTIVE still also needs allow_destructive_testing
 
 
 def _valid_classes(classes: list[str] | None) -> list[str]:
@@ -57,8 +68,36 @@ async def create_engagement(request: Request, body: CreateEngagementRequest):
         window=window,
         session_id=body.session_id,
         operator=body.operator,
+        auto_approve=bool(body.auto_approve),
     )
     return {"engagement": eng}
+
+
+@router.post("/engagements/lab-preset")
+async def create_lab_preset(request: Request, body: LabPresetRequest):
+    """Full-scope LAB ROE preset: one call that pre-authorizes all non-destructive
+    classes (PASSIVE→POST_EXPLOIT; +DESTRUCTIVE when include_destructive) for the
+    operator's OWN lab scope, with auto_approve so there is no per-action human pause.
+    The rails stay in force: audit, scope enforcement, deconfliction, cleanup — and
+    DESTRUCTIVE still requires ARCANUM_ALLOW_DESTRUCTIVE_TESTING. Scope is REQUIRED so
+    this can never pre-authorize anything outside the lab."""
+    if not (body.scope and any(str(s).strip() for s in body.scope)):
+        raise HTTPException(400, "scope é obrigatório (seu lab autorizado) — um preset full-scope nunca é sem escopo.")
+    mgr = EngagementManager(request.app.state.db)
+    window = None
+    if body.window_start or body.window_end:
+        window = {"start": body.window_start, "end": body.window_end}
+    eng = await mgr.create_lab_preset(
+        name=body.name, scope=body.scope, window=window,
+        session_id=body.session_id, operator=body.operator,
+        include_destructive=bool(body.include_destructive))
+    return {
+        "engagement": eng,
+        "note": ("Lab ROE full-scope ativo: classes pré-autorizadas, sem pausa por ação. "
+                 "Audit/escopo/deconfliction/cleanup seguem ativos. "
+                 + ("DESTRUCTIVE incluído — lembre de ARCANUM_ALLOW_DESTRUCTIVE_TESTING=1."
+                    if body.include_destructive else "DESTRUCTIVE NÃO incluído.")),
+    }
 
 
 @router.get("/engagements")
@@ -89,7 +128,10 @@ async def close_engagement(request: Request, engagement_id: str):
     if not ok:
         raise HTTPException(404, "engagement not found")
     # Closing an engagement triggers cleanup of its footholds (cleanup obligation).
-    cleaned = await SessionRegistry(request.app.state.db).cleanup(engagement_id)
+    # Pass the sandbox executor so footholds with a teardown recipe are really torn
+    # down, not just flagged (follow-up #5).
+    executor = getattr(request.app.state, "tool_executor", None)
+    cleaned = await SessionRegistry(request.app.state.db).cleanup(engagement_id, executor=executor)
     return {"status": "closed", "engagement_id": engagement_id, "cleanup": cleaned}
 
 
@@ -146,14 +188,18 @@ async def killswitch(request: Request):
             pass
 
     db = app.state.db
-    cleaned = await SessionRegistry(db).cleanup(None)  # all open footholds
+    # Real teardown of every open foothold that carries a recipe (follow-up #5);
+    # footholds with a recipe but no executor are left 'cleanup_pending' (honest).
+    executor = getattr(app.state, "tool_executor", None)
+    cleaned = await SessionRegistry(db).cleanup(None, executor=executor)  # all open footholds
 
     # Record the global kill-switch itself in the immutable trail.
     try:
         await ActionAuditLog(db).record(
             tool="kill_switch", action_class=ActionClass.PASSIVE.value,
             decision="kill_switch_global",
-            result_summary=f"engines_aborted={aborted}, sessions_cleaned={cleaned.get('cleaned', 0)}",
+            result_summary=(f"engines_aborted={aborted}, sessions_cleaned={cleaned.get('cleaned', 0)}, "
+                            f"pending={len(cleaned.get('pending', []))}, failed={len(cleaned.get('failed', []))}"),
             operator="operator",
         )
     except Exception:
@@ -164,4 +210,6 @@ async def killswitch(request: Request):
         "engines_aborted": aborted,
         "sessions_cleaned": cleaned.get("cleaned", 0),
         "cleaned_ids": cleaned.get("ids", []),
+        "cleanup_pending": cleaned.get("pending", []),
+        "cleanup_failed": cleaned.get("failed", []),
     }

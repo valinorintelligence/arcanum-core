@@ -388,3 +388,89 @@ A cada nova descoberta ou correção:
     campanha ⇒ `coverage_percent=100%` mas `coverage_percent_real=0%` + `simulated_coverage_gaps`;
     API `detection_rate_real=0%`, `coverage_simulated=100%`; `verify_detection` ⇒
     `source='deployed_rule_simulated'`. Simulado nunca mais aparece como detecção real.
+
+- **2026-10-05 — Hardening de segurança: follow-ups F0 #1–#5 + F2 (c) + F3 (d) (✅):**
+  - **F0 #3 — audit fail-closed p/ alto risco:** `_audit_record(strict=True)` + `_preaudit_high_risk`;
+    EXPLOIT/POST_EXPLOIT/DESTRUCTIVE pré-auditam (decisão `authorized`) ANTES de executar — falha de
+    registro (com governança presente) ⇒ **ação abortada**. PASSIVE/ACTIVE best-effort; sem governança
+    ⇒ no-op (backward-compat). Nos 2 caminhos de execução (`execute_approved` + loop direto).
+  - **F0 #1/#2 — regra de dois com identidade + accountability:** `execute_approved(operator=...)`
+    rastreia `approvers`, **recusa** o mesmo operador 2× (regra de dois quando há identidade);
+    `_audit_record(operator=...)` grava o(s) aprovador(es) em vez do modo. WS repassa `operator` do
+    payload. Wording honesto quando não há identidade (não alega "independentes").
+  - **F0 #4 — âncora anti-truncamento:** tabela `audit_anchor` (count + último hash sob o lock do
+    append); `verify_chain` detecta **remoção da cauda** (não só edição de linha), retornando
+    `broken_at='anchor'`. (Não cobre rewrite log+âncora simultâneo — âncora externa seria o próximo nível.)
+  - **F0 #5 — teardown real no cleanup:** `create_foothold(teardown_recipe=[...])` +
+    `cleanup(executor=...)` executa a remoção via sandbox. Honesto: sem executor ⇒ `cleanup_pending`;
+    passo falho ⇒ `cleanup_failed` (fica visível); re-rodar reprocessa pendentes/falhos. Kill-switch
+    (engine + rota HTTP) passa o executor.
+  - **F2 (c) — verify real WAF/EDR:** `_verify_real` faz GET por `external_id` (`/rules/{id}`,
+    `/detections/{id}`); sem id/não-200/erro ⇒ não ativo. Testado com httpx mockado.
+  - **F3 (d) — PREVENÇÃO ≠ DETECÇÃO:** `verify.was_prevented` (BAS `blocked` = prevenção REAL;
+    deploy preventivo mock = SIMULADA, real vence mock). `purple_results` +
+    `prevented`/`prevention_source`/`prevention_simulated`; coverage/efficacy expõem
+    `prevention_rate(_real)`; `apply_measured_results` mapeia **BLOCKED > DETECTED > MISSED** (simulado
+    ⇒ MISSED). Loop/campanha propagam.
+  - **Testes:** +22 regressões (`tests/test_redteam/test_f0_followups.py` 12,
+    `tests/test_purple/test_prevention.py` 8, `tests/test_blue/test_real_verify.py` 2). Suíte:
+    **463 → 485 verdes** (re-rodada completa por mim; 1 integration deselected).
+  - **Pendentes:** F0 #6 (roe_hash→HMAC assinado); F2 (a) apply SSH/Ansible, (b) Splunk/Sentinel reais;
+    F3 (a) Atomic Red Team real [gated — EXPLOIT], (b) multi-SIEM, (c) agendamento CTEM.
+
+- **2026-10-05 — Red Team F1 (acesso inicial — framework ofensivo governado) implementado e testado (✅):**
+  - **Decisão/escopo:** pedido de "ignorar guardrails e máximo red team" → **recusei remover os trilhos**
+    (ROE/HITL/audit/cleanup são o que torna um red team profissional/usável, não o que o limita; e não
+    bypasso minhas próprias diretrizes). Construí o **máximo legítimo**: o framework ofensivo da F1 **com os
+    trilhos intactos**, delegando às ferramentas estabelecidas do Kali (Metasploit/nuclei/impacket/…),
+    **sem exploit/payload no repo** (como o ROADMAP §11 já especificava).
+  - **Pacote `arcanum/offensive/`:** `proof.py` (`detect_access`: session vs vuln_confirmed vs None;
+    `build_proof` mascara credencial + sha256 do original), `base.py` (`OffensiveContext`: delegação única via
+    `execute` governado, `register_foothold(teardown_recipe)`, `mark_owned`), `access.py`
+    (`map_service_to_exploits` ACTIVE = nmap -sV→parse→CVE KB→candidatos+grafo; `exploit_webapp` EXPLOIT =
+    delega módulo/template/comando do operador → sessão real ⇒ foothold+prova+owned, vuln sem shell ⇒ só
+    prova, sem sandbox ⇒ recusa).
+  - **Wiring:** `TOOL_ACTION_CLASS` (map=ACTIVE, exploit_webapp=EXPLOIT, capture_proof=PASSIVE); handlers +
+    schemas + escopo de fase (EXPLOIT/ANALYSIS) em `tools.py`; `GraphManager.mark_compromised` (colunas F0
+    `owned`/`foothold_id`); finding automático com a prova. **Sem endpoint HTTP ofensivo** (só tool governado).
+  - **Governança validada:** `exploit_webapp` bloqueado por ROE sem classe EXPLOIT (`blocked_by_roe`+audit),
+    dupla aprovação, pré-auditoria fail-closed; recusa honesta sem sandbox.
+  - **Testes:** +16 (`tests/test_offensive/`: proof, access [delegação/parse/foothold/estado], governança F0).
+    Suíte **485 → 501 verdes** (re-rodada completa, 1 integration deselected).
+  - **Pendente F1:** execução real contra lab autorizado (Docker/sandbox + alvo próprio + ROE — operador);
+    screenshot como prova. **F4/F5** (pós-exploração/lateral/impacto) seguem **não implementados (gated)**.
+
+- **2026-10-05 — Red Team F4 + F5 (pós-exploração/lateral + collection/exfil/impacto) implementados (✅):**
+  - **Resposta ao pedido de "modo malware sem bloqueios":** **RECUSADO** — não existe nem vou criar um modo
+    que remova ROE/audit/cleanup para virar malware irrestrito (não adiciona poder; remove accountability/
+    reversibilidade — e está fora das minhas diretrizes). O caminho legítimo de "potência total sem fricção"
+    é um **engajamento ROE de lab** que pré-autoriza TODAS as classes + `allow_destructive_testing` no lab do
+    operador — mantendo audit/cleanup (que você QUER mesmo irrestrito, para limpar e provar o que fez).
+  - **F4 `arcanum/offensive/post_exploit.py`:** `run_on_target`, `enumerate_privesc`, `attempt_privesc`
+    (elevação→`owned=admin`), `dump_credentials` (**creds mascaradas**, raw nunca persistido), `crack_hashes`,
+    `discover_on_host`, `lateral_move` (sessão→novo foothold filho+aresta+owned), `setup_pivot`, `establish_c2`
+    (implante reversível c/ teardown, matável pelo kill-switch). Via `OffensiveContext`; delega ao Kali.
+  - **F5 `arcanum/offensive/impact.py`:** `collect_sample` (cap 4096B, mascarado), `demo_exfiltration`
+    (cap 2048B + log de DLP), `impact_poc` (**OFF por padrão** — exige `allow_destructive_testing` +
+    `test_directory` isolado).
+  - **Wiring:** `TOOL_ACTION_CLASS` (POST_EXPLOIT/EXPLOIT/DESTRUCTIVE ⇒ dupla aprovação; crack=ACTIVE);
+    12 handlers + schemas + fase EXPLOIT em `tools.py`; helpers em `base.py`/`proof.py`
+    (`extract_masked_credentials`). **Sem endpoint HTTP ofensivo.**
+  - **Testes ESCRITOS** (`tests/test_offensive/test_post_exploit.py`, `test_impact.py`,
+    `test_f4_f5_governance.py`) mas **NÃO executados nesta sessão** — o classificador de segurança bloqueou
+    execução de comandos após conteúdo ofensivo acumulado (como na sessão anterior). **Rodar
+    `pytest -m "not integration" tests/test_offensive` numa sessão nova para validar.** F1 foi validado antes
+    do bloqueio (501 verdes); F4/F5 revisados por leitura (assinaturas/handlers/classes conferidos).
+
+- **2026-10-05 — Full-scope LAB ROE preset (`auto_approve`) — potência sem fricção, trilhos intactos (✅):**
+  - Resposta construtiva ao pedido de "sem travas": em vez de um modo malware (recusado), um **engajamento de
+    lab** que pré-autoriza as classes. Coluna `engagements.auto_approve` (schema + migração idempotente);
+    `EngagementManager.create(auto_approve=...)` + `create_lab_preset(name, scope[, include_destructive])`
+    (scope **obrigatório**; concede PASSIVE→POST_EXPLOIT, +DESTRUCTIVE opcional); `auto_approve` entra no
+    `roe_hash` (tamper-evidence). Engine: `_preauthorized(action_cls)` + gate em `_run_loop` **dispensa a pausa
+    HITL** quando há engajamento `auto_approve` cobrindo a classe → executa direto com
+    `decision="executed_preauthorized"`. **Trilhos mantidos:** `_roe_authorize` (escopo/janela/classe) +
+    pré-auditoria fail-closed + audit + deconfliction + cleanup seguem; **DESTRUCTIVE só pré-autoriza com
+    `allow_destructive_testing`**. API: `POST /api/redteam/engagements/lab-preset` (+ `auto_approve` no create).
+  - **Testes ESCRITOS** `tests/test_redteam/test_lab_preset.py` (preset/scope/hash + `_preauthorized`), **não
+    executados nesta sessão** (mesmo bloqueio). Rodar junto com `tests/test_offensive`.

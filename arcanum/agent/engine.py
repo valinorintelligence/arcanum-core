@@ -9,7 +9,10 @@ from typing import Any, AsyncGenerator
 
 from .llm import OllamaClient
 from .tools import NATIVE_TOOLS, ToolExecutor, get_tools_for_phase, _auto_repair_command
-from ..redteam.action_classes import classify as _rt_classify, hitl_tier as _rt_hitl_tier, ActionClass
+from ..redteam.action_classes import (
+    classify as _rt_classify, hitl_tier as _rt_hitl_tier,
+    class_order as _rt_class_order, ActionClass,
+)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -179,11 +182,22 @@ class AgentEngine:
 
     async def _audit_record(self, *, tool: str, arguments: dict, action_cls,
                             decision: str, risk: str | None = None,
-                            result: dict | None = None, target=None) -> None:
-        """Append an action to the immutable audit trail (best-effort, masked)."""
+                            result: dict | None = None, target=None,
+                            operator: str | None = None, strict: bool = False) -> bool:
+        """Append an action to the immutable audit trail (masked). Returns True when
+        a record was written (or there is no governance to write to).
+
+        ``strict=True`` is **fail-closed** (follow-up #3): if governance IS present
+        but the write fails, the exception propagates so the caller can ABORT the
+        action (used for EXPLOIT/POST_EXPLOIT/DESTRUCTIVE before they run). With no
+        governance at all, behavior is unchanged (no-op, backward-compat).
+
+        ``operator`` records WHO authorized/ran the action; it falls back to the
+        engine mode when no operator identity is available (follow-up #2)."""
         gov = self._governance()
         if not gov or tool in self._AUDIT_SKIP:
-            return
+            return True
+        op = operator if operator else (self.mode if isinstance(self.mode, str) else None)
         try:
             from ..redteam.audit import summarize_result
             try:
@@ -201,15 +215,76 @@ class AgentEngine:
                 result_summary=summarize_result(result),
                 engagement_id=(eng or {}).get("id"),
                 session_id=self._session_id(),
-                operator=self.mode if isinstance(self.mode, str) else None,
+                operator=op,
                 deconfliction_tag=(eng or {}).get("deconfliction_tag"),
             )
+            return True
         except Exception:
-            pass
+            if strict:
+                # Fail-closed: the caller must not proceed with a high-risk action
+                # that could not be written to the immutable trail.
+                raise
+            return False
+
+    async def _preaudit_high_risk(self, *, tool: str, arguments: dict, action_cls,
+                                  risk: str | None = None, operator: str | None = None) -> str | None:
+        """Fail-closed pre-execution audit (follow-up #3) for EXPLOIT/POST_EXPLOIT/
+        DESTRUCTIVE actions. Writes a strict ``authorized`` entry BEFORE the action
+        runs; returns None when it is safe to proceed, or an error string to abort.
+        Lower classes need no pre-audit and return None."""
+        try:
+            if _rt_class_order(action_cls) < _rt_class_order(ActionClass.EXPLOIT):
+                return None
+        except Exception:
+            return None
+        try:
+            await self._audit_record(tool=tool, arguments=arguments, action_cls=action_cls,
+                                     decision="authorized", risk=risk, operator=operator,
+                                     strict=True)
+            return None
+        except Exception as exc:
+            cls_val = getattr(action_cls, "value", action_cls)
+            return (f"Ação de alto risco ({cls_val}) abortada: falha ao registrar na trilha "
+                    f"de auditoria imutável ({exc}). Nenhuma ação ofensiva executa sem "
+                    f"auditoria (fail-closed).")
+
+    async def _preauthorized(self, action_cls) -> bool:
+        """True when a full-scope LAB ROE (an active engagement with ``auto_approve``)
+        pre-authorizes this action's class, so the per-action HITL pause is waived.
+
+        This is the legitimate "full power without per-action friction" for an operator's
+        OWN lab: the signed engagement is the authorization. The rails stay — the action
+        is still ROE-scoped (``_roe_authorize`` already ran), audited, deconflicted and
+        reversible. DESTRUCTIVE additionally requires ``allow_destructive_testing`` so the
+        hardest class never auto-runs on a flag alone."""
+        gov = self._governance()
+        if not gov:
+            return False
+        try:
+            eng = await self._get_active_engagement()
+        except Exception:
+            eng = None
+        if not eng or not eng.get("auto_approve"):
+            return False
+        cls_val = getattr(action_cls, "value", str(action_cls))
+        allowed = {str(c).lower() for c in (eng.get("allowed_classes") or [])}
+        if allowed and cls_val not in allowed:
+            return False  # not pre-authorized for a class the ROE doesn't grant
+        if action_cls == ActionClass.DESTRUCTIVE:
+            try:
+                from ..core.config import get_config
+                if not get_config().allow_destructive_testing:
+                    return False
+            except Exception:
+                return False
+        return True
 
     async def kill_switch(self) -> dict:
         """Global kill-switch for THIS engine: abort the run and clean up every
-        open foothold/implant of the active engagement (cleanup obligation)."""
+        open foothold/implant of the active engagement (cleanup obligation).
+
+        Passes the sandbox executor so cleanup performs a REAL teardown of any
+        foothold that carries a teardown recipe (follow-up #5), not just a flag."""
         self.abort()
         summary = {"aborted": True, "cleaned_sessions": 0}
         gov = self._governance()
@@ -217,8 +292,12 @@ class AgentEngine:
             return summary
         try:
             eng = await self._get_active_engagement()
-            res = await gov["sessions"].cleanup((eng or {}).get("id") if eng else None)
+            res = await gov["sessions"].cleanup(
+                (eng or {}).get("id") if eng else None,
+                executor=getattr(self, "tool_executor", None))
             summary["cleaned_sessions"] = res.get("cleaned", 0)
+            summary["cleanup_pending"] = res.get("pending", [])
+            summary["cleanup_failed"] = res.get("failed", [])
             await self._audit_record(tool="kill_switch", arguments={}, action_cls=ActionClass.PASSIVE,
                                      decision="kill_switch", result=res)
         except Exception:
@@ -792,16 +871,30 @@ class AgentEngine:
                     if tier == "double":
                         requires_approval = True
 
+                    # Full-scope LAB ROE (auto_approve): the signed engagement is the
+                    # authorization, so waive the per-action human pause for its allowed
+                    # classes. Everything is still audited, scope-enforced, deconflicted
+                    # and reversible; DESTRUCTIVE still requires allow_destructive_testing.
+                    preauthorized = False
+                    if requires_approval and await self._preauthorized(action_cls):
+                        requires_approval = False
+                        preauthorized = True
+
                     if requires_approval:
                         self.pending_action = {
                             "tool": tool_name, "arguments": arguments,
                             "action_class": action_cls.value,
                             "approvals_required": approvals_required,
                             "approvals_given": 0,
+                            "approvers": [],
                         }
                         risk_pt = {"LOW": "BAIXO", "MEDIUM": "MÉDIO", "HIGH": "ALTO"}.get(risk, risk)
-                        dual_note = ("\n\n⚠️ DUPLA APROVAÇÃO: esta ação exige duas aprovações "
-                                     "independentes do operador antes de executar.") if approvals_required > 1 else ""
+                        # Honest wording: without operator identity (no auth yet) these
+                        # are two CONFIRMATIONS; the two-person rule (distinct approvers)
+                        # is enforced only when an operator identity is supplied.
+                        dual_note = ("\n\n⚠️ DUPLA APROVAÇÃO: esta ação exige duas confirmações "
+                                     "do operador antes de executar (aprovadores independentes "
+                                     "quando houver identidade de operador).") if approvals_required > 1 else ""
                         yield {
                             "type": "suggestion",
                             "tool": tool_name,
@@ -820,13 +913,23 @@ class AgentEngine:
                         }
                         return  # Pause loop until operator approves or cancels
 
+                    # Fail-closed pre-audit for high-risk classes (follow-up #3).
+                    # (These are normally gated to approval above; this is defense in
+                    # depth so an EXPLOIT+ action can never run unaudited.)
+                    preaudit_err = await self._preaudit_high_risk(
+                        tool=tool_name, arguments=arguments, action_cls=action_cls, risk=risk)
+                    if preaudit_err:
+                        yield {"type": "error", "error": preaudit_err, "iteration": self.iteration}
+                        return
+
                     # Execute the tool
                     result = await self.tool_executor.execute_tool(tool_name, arguments)
                     self._last_executed_tool = tool_name
                     self._native_repeat_count = 0
                     # F0: immutable audit trail of the executed action (masked args).
                     await self._audit_record(tool=tool_name, arguments=arguments,
-                                             action_cls=action_cls, decision="executed",
+                                             action_cls=action_cls,
+                                             decision="executed_preauthorized" if preauthorized else "executed",
                                              risk=risk, result=result)
                     if tool_name == "execute":
                         self._record_cmd_result(arguments.get("command", ""), result)
@@ -876,12 +979,17 @@ class AgentEngine:
 
         yield {"type": "error", "error": f"Limite máximo de iterações ({MAX_ITERATIONS}) atingido", "iteration": self.iteration}
 
-    async def execute_approved(self) -> AsyncGenerator[dict, None]:
+    async def execute_approved(self, operator: str | None = None) -> AsyncGenerator[dict, None]:
         """Execute a tool action previously held for operator approval.
 
         Dual-approval classes (EXPLOIT/POST_EXPLOIT/DESTRUCTIVE) require two
-        independent approvals: the first approval re-arms the pending action and
-        requests the second; only the final approval executes."""
+        approvals: the first re-arms the pending action and requests the second;
+        only the final approval executes.
+
+        ``operator`` identifies WHO is approving (follow-up #1/#2). When identities
+        are supplied, the **two-person rule** is enforced: the same operator cannot
+        provide both approvals. Without an identity (no auth yet) it falls back to a
+        plain count of confirmations, and the wording says so honestly."""
         if not self.pending_action:
             yield {"type": "info", "content": "Nenhuma ação pendente de aprovação."}
             return
@@ -891,13 +999,37 @@ class AgentEngine:
         arguments = action["arguments"]
         action_cls = _rt_classify(tool_name, arguments)
 
-        # --- F0 dual approval gate ---
+        # --- F0 dual approval gate (identity-aware) ---
         need = int(action.get("approvals_required", 1) or 1)
+        approvers = list(action.get("approvers") or [])
+        # Two-person rule: a known operator cannot approve the same action twice.
+        if operator is not None and operator in approvers:
+            self.pending_action = action  # unchanged — still waiting
+            yield {
+                "type": "suggestion",
+                "tool": tool_name,
+                "arguments": arguments,
+                "risk": self._assess_risk(tool_name, arguments),
+                "action_class": action_cls.value,
+                "approvals_required": need,
+                "approvals_given": len(approvers),
+                "message": (
+                    f"Aprovação recusada: o operador '{operator}' já aprovou esta ação. "
+                    f"A regra de dois exige a aprovação de um operador DIFERENTE antes de "
+                    f"executar '{tool_name}'."
+                ),
+            }
+            return
         given = int(action.get("approvals_given", 0) or 0) + 1
+        if operator is not None:
+            approvers.append(operator)
         if given < need:
-            # Keep pending; wait for the next independent approval.
-            self.pending_action = {**action, "approvals_given": given}
+            # Keep pending; wait for the next approval.
+            self.pending_action = {**action, "approvals_given": given, "approvers": approvers}
             explanation = self._explain_tool_action(tool_name, arguments)
+            # Honest wording: "independent approvers" only when identities are tracked.
+            independence = ("de um operador DIFERENTE (regra de dois)" if operator is not None
+                            else "do operador (identidade de operador exige autenticação)")
             yield {
                 "type": "suggestion",
                 "tool": tool_name,
@@ -906,30 +1038,43 @@ class AgentEngine:
                 "action_class": action_cls.value,
                 "approvals_required": need,
                 "approvals_given": given,
+                "approvers": approvers,
                 "explanation": explanation,
                 "message": (
                     f"Aprovação {given}/{need} registrada. DUPLA APROVAÇÃO exigida: "
-                    f"é necessária mais {need - given} aprovação independente do operador "
+                    f"é necessária mais {need - given} aprovação {independence} "
                     f"antes de executar '{tool_name}'."
                 ),
             }
             return
 
         self.pending_action = None
+        # Who is accountable for this action in the audit trail (follow-up #2).
+        operator_label = ", ".join(approvers) if approvers else operator
+
+        # Fail-closed pre-audit for high-risk classes (follow-up #3): abort if the
+        # action cannot be written to the immutable trail BEFORE it runs.
+        preaudit_err = await self._preaudit_high_risk(
+            tool=tool_name, arguments=arguments, action_cls=action_cls,
+            risk=self._assess_risk(tool_name, arguments), operator=operator_label)
+        if preaudit_err:
+            yield {"type": "error", "error": preaudit_err, "iteration": self.iteration}
+            return
 
         yield {"type": "thinking", "content": f"Executando ação aprovada pelo operador: {tool_name}"}
         try:
             result = await self.tool_executor.execute_tool(tool_name, arguments)
         except Exception as exc:
             await self._audit_record(tool=tool_name, arguments=arguments, action_cls=action_cls,
-                                     decision="executed_error", result={"success": False, "error": str(exc)})
+                                     decision="executed_error", operator=operator_label,
+                                     result={"success": False, "error": str(exc)})
             yield {"type": "error", "error": f"Falha na execução da ferramenta {tool_name}: {exc}", "iteration": self.iteration}
             return
         self._last_executed_tool = tool_name
         self._native_repeat_count = 0
         # F0: immutable audit trail of the operator-approved action.
         await self._audit_record(tool=tool_name, arguments=arguments, action_cls=action_cls,
-                                 decision="executed_approved",
+                                 decision="executed_approved", operator=operator_label,
                                  risk=self._assess_risk(tool_name, arguments), result=result)
         if tool_name == "execute":
             self._record_cmd_result(arguments.get("command", ""), result)

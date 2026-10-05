@@ -204,7 +204,9 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
 
                 if engine.pending_action and clean_input in affirmative_phrases:
                     await manager.broadcast(session_id, {"type": "approved", "content": "Ação aprovada pelo operador"})
-                    await _drive_agent_stream(websocket, app, session_id, engine, engine.execute_approved())
+                    # Optional operator identity enables the real two-person rule (#1/#2).
+                    await _drive_agent_stream(websocket, app, session_id, engine,
+                                              engine.execute_approved(operator=data.get("operator")))
                     continue
 
                 if engine.pending_action and clean_input in cancel_phrases:
@@ -221,7 +223,9 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 engine = app.state.active_engines.get(session_id)
                 if engine and engine.pending_action:
                     await manager.broadcast(session_id, {"type": "approved", "content": "Action approved by operator"})
-                    await _drive_agent_stream(websocket, app, session_id, engine, engine.execute_approved())
+                    # Optional operator identity enables the real two-person rule (#1/#2).
+                    await _drive_agent_stream(websocket, app, session_id, engine,
+                                              engine.execute_approved(operator=data.get("operator")))
                 else:
                     await manager.broadcast(session_id, {"type": "info", "content": "No action pending approval"})
 
