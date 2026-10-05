@@ -1,6 +1,8 @@
 """F1 — proof capture + access-signal detection (pure, no attack)."""
 
-from arcanum.offensive.proof import detect_access, build_proof
+import pytest
+
+from arcanum.offensive.proof import detect_access, build_proof, capture_screenshot
 
 
 def test_detect_access_session_signals():
@@ -28,3 +30,25 @@ def test_build_proof_masks_credentials_and_hashes_original():
     assert len(p["sha256"]) == 64                   # hash over the ORIGINAL text
     assert p["deconfliction_tag"] == "ARC-X"
     assert p["summary"] == "confirmed"
+
+
+@pytest.mark.asyncio
+async def test_capture_screenshot_captured_with_injected_shooter(tmp_path):
+    async def shooter(url, path):
+        with open(path, "wb") as fh:
+            fh.write(b"\x89PNG\r\n stub image bytes")
+        return True
+    res = await capture_screenshot("http://host.docker.internal:8080/app", tmp_path,
+                                   shooter=shooter, deconfliction_tag="ARC-1")
+    assert res["status"] == "captured" and res["proof_type"] == "screenshot"
+    assert len(res["sha256"]) == 64 and res["path"].endswith(".png")
+    assert res["deconfliction_tag"] == "ARC-1"
+
+
+@pytest.mark.asyncio
+async def test_capture_screenshot_unavailable_is_honest(tmp_path):
+    async def shooter(url, path):
+        return False  # e.g. Playwright not installed
+    res = await capture_screenshot("http://t", tmp_path, shooter=shooter)
+    assert res["status"] == "unavailable" and res["proof_type"] == "screenshot"
+    assert "path" not in res  # never claims an image it did not capture

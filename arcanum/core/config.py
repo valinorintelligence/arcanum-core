@@ -142,6 +142,26 @@ class ArcanumConfig(BaseSettings):
     elastic_url: str = ""
     elastic_api_key: str = ""
 
+    # Blue Team F2 (b) — real SIEM detection-rule deploy backends.
+    # Splunk management REST (:8089) for saved/correlation searches.
+    splunk_mgmt_url: str = ""          # e.g. https://splunk.internal:8089
+    splunk_mgmt_token: str = ""        # Bearer token (preferred)
+    splunk_username: str = ""          # or HTTP basic auth
+    splunk_password: str = ""
+    splunk_app: str = "search"         # app context for the saved search
+    # Microsoft Sentinel analytics rules via the ARM REST API.
+    sentinel_resource_id: str = ""     # ARM scope: /subscriptions/.../workspaces/<ws>
+    sentinel_token: str = ""           # Azure AD bearer token (operator-provided)
+    sentinel_api_version: str = "2023-11-01"
+
+    # Blue Team F2 (a) — real hardening apply over SSH (advanced opt-in; also read
+    # from ARCANUM_HARDENING_SSH_* env). Requires `paramiko` installed on the server.
+    hardening_ssh_target: str = ""     # host (or user@host)
+    hardening_ssh_user: str = ""
+    hardening_ssh_key: str = ""        # path to a private key
+    hardening_ssh_password: str = ""
+    hardening_ssh_port: int = 22
+
     slack_webhook_url: str = ""
     teams_webhook_url: str = ""
     custom_webhook_url: str = ""

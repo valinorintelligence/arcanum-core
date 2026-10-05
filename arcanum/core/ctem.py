@@ -285,12 +285,129 @@ class CTEMDaemon:
                 logger.error(f"Error running CTEM schedule {row['id']}: {e}")
         return executed
 
+    # -- Purple campaign scheduling (F3 c) ----------------------------------
+
+    async def init_purple_tables(self) -> None:
+        """Table for recurring Purple campaigns (continuous coverage measurement)."""
+        await self.db.execute(
+            """CREATE TABLE IF NOT EXISTS ctem_purple_schedules (
+                id TEXT PRIMARY KEY,
+                session_id TEXT,
+                techniques TEXT NOT NULL,        -- JSON list of ATT&CK technique ids
+                frequency_minutes INTEGER DEFAULT 1440,
+                auto_tune INTEGER DEFAULT 1,
+                status TEXT DEFAULT 'active',
+                last_run_at DATETIME,
+                next_run_at DATETIME,
+                total_runs INTEGER DEFAULT 0,
+                last_campaign_id TEXT,
+                last_coverage TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )"""
+        )
+
+    async def create_purple_schedule(self, techniques, frequency_minutes: int = 1440,
+                                      session_id: str | None = None,
+                                      auto_tune: bool = True) -> dict[str, Any]:
+        """Schedule a recurring Purple campaign. Runs UNATTENDED, so it measures
+        coverage via simulation (no sandbox/atomics) — never launches real attacks."""
+        import json as _json
+        await self.init_purple_tables()
+        if isinstance(techniques, str):
+            techniques = [t.strip() for t in techniques.replace(";", ",").split(",") if t.strip()]
+        if not techniques:
+            raise ValueError("techniques required (list of ATT&CK ids, e.g. ['T1190','T1059.001'])")
+        sid = f"pcs-{uuid.uuid4().hex[:8]}"
+        now = datetime.now(timezone.utc)
+        nxt = now + timedelta(minutes=frequency_minutes)
+        await self.db.execute(
+            """INSERT INTO ctem_purple_schedules
+               (id, session_id, techniques, frequency_minutes, auto_tune, status, next_run_at, created_at)
+               VALUES (?, ?, ?, ?, ?, 'active', ?, ?)""",
+            (sid, session_id, _json.dumps(techniques), frequency_minutes,
+             1 if auto_tune else 0, nxt.isoformat(), now.isoformat()))
+        return {"schedule_id": sid, "techniques": techniques, "frequency_minutes": frequency_minutes,
+                "auto_tune": bool(auto_tune), "status": "active", "next_run_at": nxt.isoformat()}
+
+    async def list_purple_schedules(self) -> list[dict[str, Any]]:
+        import json as _json
+        await self.init_purple_tables()
+        cursor = await self.db.execute(
+            "SELECT * FROM ctem_purple_schedules ORDER BY created_at DESC")
+        rows = await cursor.fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            try:
+                d["techniques"] = _json.loads(d.get("techniques") or "[]")
+            except Exception:
+                d["techniques"] = []
+            d["auto_tune"] = bool(d.get("auto_tune"))
+            if d.get("last_coverage"):
+                try:
+                    d["last_coverage"] = _json.loads(d["last_coverage"])
+                except Exception:
+                    pass
+            out.append(d)
+        return out
+
+    async def run_purple_schedule(self, schedule_id: str) -> dict[str, Any]:
+        """Run one scheduled Purple campaign (simulation/measurement, unattended)."""
+        import json as _json
+        await self.init_purple_tables()
+        row = await self.db.fetch_one(
+            "SELECT * FROM ctem_purple_schedules WHERE id = ?", (schedule_id,))
+        if not row:
+            return {"error": "schedule not found", "schedule_id": schedule_id}
+        techniques = _json.loads(row["techniques"] or "[]")
+        auto_tune = bool(row["auto_tune"])
+        from arcanum.purple.campaign import PurpleCampaign
+        try:
+            from arcanum.core.config import get_config
+            cfg = get_config()
+        except Exception:
+            cfg = None
+        # Unattended ⇒ simulation only (sandbox=None, no atomics): measures detection
+        # coverage from deployed rules over time; never runs real attacks on a schedule.
+        camp = PurpleCampaign(self.db, config=cfg, sandbox=None, session_id=row["session_id"])
+        result = await camp.run(techniques, auto_tune=auto_tune)
+        cov = result.get("coverage", {}) or {}
+        now = datetime.now(timezone.utc)
+        nxt = now + timedelta(minutes=int(row["frequency_minutes"] or 1440))
+        await self.db.execute(
+            """UPDATE ctem_purple_schedules SET last_run_at=?, next_run_at=?,
+               total_runs=total_runs+1, last_campaign_id=?, last_coverage=? WHERE id=?""",
+            (now.isoformat(), nxt.isoformat(), result.get("campaign_id"),
+             _json.dumps({"coverage_percent": cov.get("coverage_percent"),
+                          "coverage_percent_real": cov.get("coverage_percent_real"),
+                          "prevention_percent_real": cov.get("prevention_percent_real")}),
+             schedule_id))
+        return {"schedule_id": schedule_id, "campaign_id": result.get("campaign_id"),
+                "coverage": cov, "next_run_at": nxt.isoformat()}
+
+    async def run_due_purple_schedules(self) -> int:
+        await self.init_purple_tables()
+        now_iso = datetime.now(timezone.utc).isoformat()
+        cursor = await self.db.execute(
+            "SELECT id FROM ctem_purple_schedules WHERE status='active' "
+            "AND (next_run_at IS NULL OR next_run_at <= ?)", (now_iso,))
+        due = await cursor.fetchall()
+        executed = 0
+        for row in due:
+            try:
+                await self.run_purple_schedule(row["id"])
+                executed += 1
+            except Exception as e:
+                logger.error(f"Error running purple schedule {row['id']}: {e}")
+        return executed
+
     async def _daemon_loop(self) -> None:
         """Internal background loop checking for due schedules."""
         logger.info("CTEM Daemon background worker started.")
         while self._running:
             try:
                 await self.run_due_schedules()
+                await self.run_due_purple_schedules()
             except Exception as e:
                 logger.error(f"CTEM daemon tick error: {e}")
             await asyncio.sleep(self.check_interval_seconds)

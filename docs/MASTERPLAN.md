@@ -490,3 +490,40 @@ A cada nova descoberta ou correção:
     `pytest tests/test_redteam`.
   - **FOLLOW-UPS F0 #1–#6 TODOS CONCLUÍDOS.** Arquivos: `core/config.py`, `core/database.py`,
     `redteam/engagement.py`, `api/routes/redteam.py`.
+
+- **2026-10-05 — F2 (a)+(b): backends reais de SIEM + apply de hardening via SSH (✅):**
+  - **(b) SIEM multi-backend** (`blue/deployers/siem.py`): `_backend()` roteia **Elastic > Splunk >
+    Sentinel**. Splunk = saved/correlation search via mgmt REST (:8089, token Bearer ou basic auth,
+    app context); Sentinel = `alertRules` via ARM (`PUT/GET/DELETE`, bearer do operador, api-version
+    configurável). `external_id` **prefixado** (`elastic:`/`splunk:`/`sentinel:`) roteia verify/rollback
+    (legado sem prefixo ⇒ Elastic). Splunk exige SPL, Sentinel exige KQL (senão erro honesto). Sem creds
+    ⇒ mock honesto. Chronicle fica como futuro.
+  - **(a) Hardening via SSH** (`blue/hardening.py`): backend SSH opt-in (`ARCANUM_HARDENING_SSH_*`,
+    paramiko **opcional** — sem dependência obrigatória; `ssh_runner` injetável p/ teste). Apply =
+    backup + append do snippet entre marcadores `# ARCANUM-HARDENING <id> START/END`; rollback remove
+    exatamente o bloco (ou restaura backup). Dry-run default; sem backend ⇒ mock honesto; SSH falho ⇒
+    `failed` (nunca finge). Marcador/backup no `payload` do registry.
+  - **Config:** `splunk_mgmt_url/token/username/password/app`, `sentinel_resource_id/token/api_version`,
+    `hardening_ssh_target/user/key/password/port`.
+  - **Testes** `tests/test_blue/test_siem_backends.py` + `test_hardening_ssh.py` (seleção de backend,
+    shape das requisições Splunk/Sentinel, verify/rollback roteados, backup+marcador+rollback SSH, mock
+    honesto, falha honesta). **Mockados (httpx/ssh_runner) — NÃO validados contra serviço/host real;
+    não executados nesta sessão (classificador).** Rodar `pytest tests/test_blue`. **F2 (a)(b)(c) FECHADOS.**
+
+- **2026-10-05 — F3 (a)+(b)+(c): Atomic Red Team real + detecção multi-SIEM + agendamento Purple no CTEM (✅):**
+  - **(a) Atomic Red Team real** (`purple/bas.py`): `run(use_atomics=True)` **opt-in** monta
+    `Invoke-AtomicTest <tid>` (override `ARCANUM_ATOMIC_CMD_TEMPLATE`), executa no sandbox com a
+    deconfliction tag carimbada (`echo <tag>; <cmd>`); default False preserva o comportamento (sem
+    command ⇒ simulação); sem sandbox ⇒ simulação honesta. Threadado por `loop.close_gap`,
+    `campaign.run` e os handlers `run_bas_test`/`run_purple_campaign`.
+  - **(b) Detecção multi-SIEM** (`purple/verify.py`): `_siem_backends`/`_query_backend` consultam
+    **Elastic + Splunk (oneshot search :8089) + Sentinel (Log Analytics /query ARM)**; `_query_siem` vira
+    dispatcher com **OR** entre backends (preserva o contrato: assinatura e `source='siem'`); todos com
+    erro ⇒ `siem_error` honesto. Reusa os campos de config da F2 (b).
+  - **(c) Campanhas Purple recorrentes** (`core/ctem.py`): tabela `ctem_purple_schedules` +
+    `create_purple_schedule`/`list`/`run`/`run_due_purple_schedules`, rodadas no `_daemon_loop`.
+    **Unattended ⇒ simulação/medição** (sandbox=None, sem atomics) — nunca ataca num agendamento.
+  - **Testes** `tests/test_purple/test_f3_followups.py` (seleção/OR multi-SIEM + shape Splunk/Sentinel
+    mockado; ART monta Invoke-AtomicTest + tag + override + simula sem sandbox; CTEM create/list/run/due).
+    **Mockados — não validados contra serviço/sandbox real; não executados nesta sessão.** Rodar
+    `pytest tests/test_purple`. **F3 (a)(b)(c)(d) FECHADOS.**

@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import uuid
 from datetime import datetime, timezone
 
 from ..redteam.audit import _scrub_credentials_in_text
@@ -121,3 +123,51 @@ def build_proof(proof_type: str, raw, note: str | None = None,
         "captured_at": datetime.now(timezone.utc).isoformat(),
         "deconfliction_tag": deconfliction_tag,
     }
+
+
+async def _playwright_shot(url: str, path: str) -> bool:
+    """Screenshot ``url`` to ``path`` with Playwright. False if Playwright is absent."""
+    try:
+        from playwright.async_api import async_playwright
+    except Exception:
+        return False
+    async with async_playwright() as p:
+        browser = await p.chromium.launch()
+        try:
+            page = await browser.new_page()
+            await page.goto(url, timeout=30000)
+            await page.screenshot(path=path, full_page=True)
+        finally:
+            await browser.close()
+    return True
+
+
+async def capture_screenshot(url: str, out_dir, shooter=None,
+                             deconfliction_tag: str | None = None) -> dict:
+    """Capture a screenshot of ``url`` as proof (F1 — visual evidence of access).
+
+    Uses Playwright if installed; otherwise returns an **honest** ``unavailable``
+    record — it never fabricates an image or claims a capture that did not happen.
+    ``shooter(url, path) -> bool`` is injectable for tests/custom backends.
+    """
+    safe = re.sub(r"[^a-z0-9]+", "-", (url or "").lower()).strip("-")[:40] or "target"
+    path = os.path.join(str(out_dir), f"proof-{safe}-{uuid.uuid4().hex[:6]}.png")
+    ok, err = False, None
+    try:
+        os.makedirs(str(out_dir), exist_ok=True)
+        ok = await (shooter(url, path) if shooter is not None else _playwright_shot(url, path))
+    except Exception as exc:
+        err = str(exc)
+    if not ok:
+        return {"proof_type": "screenshot", "status": "unavailable", "url": url,
+                "note": "Screenshot não capturado (Playwright/headless indisponível).",
+                "error": err, "deconfliction_tag": deconfliction_tag}
+    sha = ""
+    try:
+        with open(path, "rb") as fh:
+            sha = hashlib.sha256(fh.read()).hexdigest()
+    except Exception:
+        pass
+    return {"proof_type": "screenshot", "status": "captured", "url": url, "path": path,
+            "sha256": sha, "captured_at": datetime.now(timezone.utc).isoformat(),
+            "deconfliction_tag": deconfliction_tag}

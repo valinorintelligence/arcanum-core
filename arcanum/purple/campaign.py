@@ -23,7 +23,7 @@ class PurpleCampaign:
         self.store = PurpleResultStore(db)
 
     async def run(self, techniques: list, auto_tune: bool = True,
-                  campaign_id: str | None = None) -> dict:
+                  campaign_id: str | None = None, use_atomics: bool = False) -> dict:
         """Run a campaign over ``techniques`` (list of ids, or dicts with
         {technique_id, tactic, command}). Returns coverage + per-technique results."""
         campaign_id = campaign_id or ("pc-" + uuid.uuid4().hex[:8])
@@ -39,7 +39,7 @@ class PurpleCampaign:
                 continue
             res = await self.loop.close_gap(
                 tid, campaign_id=campaign_id, tactic=tactic, command=command,
-                auto_tune=auto_tune)
+                auto_tune=auto_tune, use_atomics=use_atomics)
             after = res.get("after") or {}
             prev_before = res.get("before_prevention", {})
             per_technique.append({

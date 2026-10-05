@@ -158,6 +158,17 @@
   endpoint admin (mesmo contrato REST de deploy/rollback: `/rules/{id}`, `/detections/{id}`); sem
   id/não-200/erro ⇒ **não ativo** (honesto, nunca confia cego). Mock continua confiando no registry.
   *(Testado com httpx mockado — não validado contra WAF/EDR real.)*
+- **SIEM com múltiplos backends reais (follow-up F2 (b)).** `SIEMDeployer._backend()` roteia
+  **Elastic > Splunk > Sentinel** pelo que está configurado; `external_id` é **prefixado**
+  (`elastic:`/`splunk:`/`sentinel:`) e verify/rollback roteiam por esse prefixo (legado sem prefixo ⇒
+  Elastic). Splunk = saved/correlation search via mgmt REST (:8089, token ou basic); Sentinel =
+  `alertRules` via ARM (bearer do operador). Sem creds ⇒ **mock honesto**. Splunk exige SPL, Sentinel
+  exige KQL (senão erro honesto). *(Testado com httpx mockado — não validado contra SIEM real.)*
+- **`apply_hardening` real via SSH (follow-up F2 (a)).** Backend SSH opt-in (`ARCANUM_HARDENING_SSH_*`,
+  paramiko opcional; `ssh_runner` injetável p/ teste). Apply faz **backup + append** do snippet entre
+  marcadores `# ARCANUM-HARDENING <id> START/END`; rollback **remove exatamente esse bloco** (ou restaura
+  o backup) — reversível de verdade. Dry-run segue o padrão; sem backend ⇒ mock honesto; falha de SSH ⇒
+  `failed` (nunca finge). Marcador/backup ficam no `payload` do registry p/ rollback.
 
 ### Purple Team (F3 — `arcanum/purple/`)
 - **Eficácia é MEDIDA, não seed.** O loop grava cada run+veredito em `purple_results`
@@ -186,6 +197,18 @@
 - **Emulação é EXPLOIT (gated).** `run_bas_test`/`run_purple_campaign` = EXPLOIT (ROE + dupla
   aprovação); `verify_detection`/`measure_coverage` = PASSIVE. A API Purple é **read-only** — execução
   só pelos tools governados (nunca um endpoint HTTP dispara emulação).
+- **Atomic Red Team real é OPT-IN (follow-up F3 (a)).** `BASRunner.run(use_atomics=True)` monta
+  `Invoke-AtomicTest <tid>` (override `ARCANUM_ATOMIC_CMD_TEMPLATE`) e executa no sandbox carimbando a
+  deconfliction tag; **default `use_atomics=False`** preserva o comportamento (sem command ⇒ simulação).
+  Sem sandbox ⇒ simulação honesta. Nunca embutir atomics/exploit no repo — são a ferramenta estabelecida.
+- **Detecção multi-SIEM (follow-up F3 (b)).** `_siem_backends`/`_query_backend` consultam Elastic +
+  Splunk (oneshot search) + Sentinel (Log Analytics /query); `_query_siem` faz **OR** (hit em qualquer
+  controle real ⇒ `source='siem'`); todos com erro ⇒ `siem_error` honesto. Ao somar backend, não quebrar
+  o contrato (`_query_siem(tag, window)` é o dispatcher; `source` permanece `siem`).
+- **Campanhas Purple recorrentes no CTEM (follow-up F3 (c)).** `CTEMDaemon.create_purple_schedule`/`run`/
+  `run_due_purple_schedules` (tabela `ctem_purple_schedules`, rodadas no `_daemon_loop`). **Unattended ⇒
+  simulação/medição** (sandbox=None, sem atomics): mede cobertura ao longo do tempo, **nunca** dispara
+  ataque real num agendamento.
 
 ### Ofensivo F1 (`arcanum/offensive/`) — acesso inicial, framework governado
 - **ZERO exploit/payload no repo.** `arcanum/offensive/` é só **orquestração + governança**: delega a

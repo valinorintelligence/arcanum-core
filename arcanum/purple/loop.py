@@ -53,10 +53,12 @@ class PurpleLoop:
 
     async def close_gap(self, technique_id: str, campaign_id: str | None = None,
                         tactic: str | None = None, command: str | None = None,
-                        auto_tune: bool = True, target_system: str = "siem") -> dict:
+                        auto_tune: bool = True, target_system: str = "siem",
+                        use_atomics: bool = False) -> dict:
         campaign_id = campaign_id or ("pc-" + uuid.uuid4().hex[:8])
 
-        run = await self.bas.run(technique_id, campaign_id, tactic=tactic, command=command)
+        run = await self.bas.run(technique_id, campaign_id, tactic=tactic, command=command,
+                                 use_atomics=use_atomics)
         tag = run.get("deconfliction_tag")
 
         before = await self.verifier.was_detected(technique_id, tag=tag)

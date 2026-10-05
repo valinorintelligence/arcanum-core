@@ -328,12 +328,17 @@ altera nada; IR reversível. **447 testes verdes** (+20 em `tests/test_blue/`). 
   `ARCANUM_EDR_API_URL/TOKEN`). Splunk HEC/Datadog **ingerem eventos, não regras** → reportam honesto
   "não suportado" em vez de fingir deploy. Sem credenciais ⇒ **mock honesto** (`mock:true`), nunca
   finge deploy real.
-- **Follow-ups F2:** (a) ⬜ apply real de hardening via SSH/Ansible/PR de IaC (hoje mock honesto,
-  reversível, só registra o diff); (b) ⬜ adaptadores reais p/ Splunk saved-search (REST mgmt 8089) e
-  Sentinel/Chronicle; (c) ✅ **`verify` real para WAF/EDR** (2026-10-05): `_verify_real` faz GET por
-  external id no endpoint admin (mesmo contrato REST de deploy/rollback); sem id/não-200/erro ⇒ não
-  ativo (honesto). Mock continua confiando no registry. (Testado com httpx mockado — não validado
-  contra WAF/EDR real.)
+- **Follow-ups F2:** (a) ✅ **apply real de hardening via SSH** (2026-10-05): `HardeningApplier`
+  com backend SSH (`ARCANUM_HARDENING_SSH_*`, paramiko opcional + `ssh_runner` injetável) — backup +
+  append do snippet entre marcadores `# ARCANUM-HARDENING <id> START/END`; rollback remove exatamente
+  esse bloco (ou restaura o backup). Dry-run default; sem backend ⇒ mock honesto; falha de SSH ⇒ `failed`
+  (nunca finge). (b) ✅ **Splunk saved-search + Sentinel reais** (2026-10-05): `SIEMDeployer._backend()`
+  roteia Elastic>Splunk>Sentinel; Splunk via mgmt REST (:8089, saved/correlation search, token/basic);
+  Sentinel via ARM (`alertRules` PUT/GET/DELETE, bearer do operador); `external_id` prefixado
+  (`elastic:`/`splunk:`/`sentinel:`) roteia verify/rollback; sem creds ⇒ mock honesto. Chronicle fica
+  como futuro. *(Ambos testados com httpx/ssh_runner mockados — não validados contra serviço real.)*
+  (c) ✅ **`verify` real para WAF/EDR** (2026-10-05): `_verify_real` faz GET por external id no endpoint
+  admin; sem id/não-200/erro ⇒ não ativo. **Follow-ups F2 (a)(b)(c) CONCLUÍDOS.**
 
 ### F3 — Purple Team: loop fechado (BAS medido)
 **Pacote `arcanum/purple/`:**
@@ -378,9 +383,17 @@ cobertura 100% após tuning; campanha sem auto-tune → lacunas medidas honestam
   `detection_rate_real` (controles reais) de `coverage_simulated` (mock); `apply_measured_results` só
   marca DETECTED no MITRE para detecção real (simulada ⇒ MISSED). Sem isso, cobertura mock inflava o
   detection_rate/heatmap.
-- **Follow-ups F3:** (a) ⬜ execução real de Atomic Red Team no sandbox autorizado (hoje simulação
-  honesta sem sandbox; **gated** — EXPLOIT); (b) ⬜ correlação de detecção por alerta real multi-SIEM
-  (Splunk/Sentinel/Chronicle); (c) ⬜ agendar campanhas recorrentes via CTEM daemon; (d) ✅
+- **Follow-ups F3:** (a) ✅ **Atomic Red Team real** (2026-10-05): `BASRunner.run(use_atomics=True)`
+  (opt-in) monta `Invoke-AtomicTest <tid>` (override via `ARCANUM_ATOMIC_CMD_TEMPLATE`), executa no
+  sandbox com a tag de deconfliction carimbada; sem sandbox ⇒ simulação honesta; default preserva o
+  comportamento atual. Gated (EXPLOIT). Threadado por loop/campaign/tools. (b) ✅ **detecção
+  multi-SIEM** (2026-10-05): `DetectionVerifier._siem_backends`/`_query_backend` consultam
+  **Elastic + Splunk (oneshot search) + Sentinel (Log Analytics /query)**; `_query_siem` faz OR entre
+  backends (hit em qualquer controle real ⇒ `source='siem'`); todos com erro ⇒ `siem_error` honesto.
+  (c) ✅ **campanhas Purple recorrentes via CTEM** (2026-10-05): `CTEMDaemon.create_purple_schedule`/
+  `list`/`run`/`run_due_purple_schedules` (tabela `ctem_purple_schedules`), rodadas no `_daemon_loop`;
+  **unattended ⇒ simulação/medição** (sem sandbox/atomics — nunca ataca em agendamento). *(a/b testados
+  com sandbox/httpx mockados — não validados contra serviço real.)* **Follow-ups F3 (a)(b)(c)(d) CONCLUÍDOS.** (d) ✅
   **PREVENÇÃO distinta de DETECÇÃO** (2026-10-05): `verify.was_prevented` mede bloqueio (BAS run
   `blocked` = prevenção REAL; deploy preventivo mock = prevenção SIMULADA, nunca real). `purple_results`
   ganha `prevented`/`prevention_source`/`prevention_simulated`; coverage/efficacy expõem
@@ -436,8 +449,11 @@ Pacote `arcanum/offensive/` — **framework governado, zero exploit no repo** (d
   permite EXPLOIT (evento `blocked_by_roe` + audit), exige **dupla aprovação** e **pré-auditoria fail-closed**;
   **a API é só por tool governado** (sem endpoint HTTP que dispara exploração). **+16 testes**
   (`tests/test_offensive/`). Nada executa sem sandbox autorizado + ROE.
-- **Pendentes F1:** execução real contra lab autorizado (precisa Docker/sandbox + alvo próprio + ROE
-  assinado — responsabilidade do operador); captura de screenshot como prova; `enrich_cve_threat` no mapper.
+- **Screenshot como prova ✅ (2026-10-05):** `offensive/proof.capture_screenshot` (Playwright se
+  instalado, `shooter` injetável p/ teste, **honesto** `unavailable` se ausente — nunca fabrica imagem);
+  `capture_proof(proof_type='screenshot', url=...)` salva PNG no workspace + sha256.
+- **Pendentes F1:** execução real contra lab autorizado (Docker/sandbox + alvo próprio + ROE — operador);
+  `enrich_cve_threat` no mapper (menor).
 
 ### F4 — Pós-exploração & movimento lateral (via foothold)
 Todas operam **através de um foothold existente** e **delegam** à ferramenta estabelecida:

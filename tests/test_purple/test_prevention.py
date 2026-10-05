@@ -150,7 +150,7 @@ def test_measured_report_prevention_rates():
 async def test_close_gap_blocked_run_is_prevented(db):
     loop = PurpleLoop(db)
 
-    async def fake_run(tid, cid, tactic=None, command=None):
+    async def fake_run(tid, cid, tactic=None, command=None, **kwargs):
         return {"technique_id": tid, "executed": True, "execution_status": "blocked",
                 "deconfliction_tag": f"ARCANUM-BAS:{cid}:{tid}"}
     loop.bas.run = fake_run

@@ -10,9 +10,11 @@ never a simulated signal painted as real:
    coverage, which must NOT count toward the real detection rate. A rule deployed
    to a real control (``mock=False``) is ``source="deployed_rule"``,
    ``simulated=False``. A real match is preferred over a mock one.
-2. **Real SIEM query** (optional): when SIEM credentials are configured, query the
-   SIEM for an alert carrying the deconfliction tag in the window
-   (``source="siem"``, ``simulated=False``).
+2. **Real SIEM query** (optional, F3 b — MULTI-SIEM): when SIEM credentials are
+   configured, query EVERY configured backend (Elastic, Splunk, Microsoft Sentinel)
+   for an alert carrying the deconfliction tag in the window; a hit from any real
+   control ⇒ ``source="siem"``, ``simulated=False``. All backends erroring ⇒ honest
+   ``siem_error``.
 
 If nothing covers the technique, the verdict is MISS (``detected=False``), not
 unknown. This is the invariant from AGENTS §5: never report simulated as real.
@@ -31,6 +33,8 @@ import json
 from typing import Any
 
 from ..blue.registry import DeploymentRegistry
+
+_ARM = "https://management.azure.com"
 
 # Deployed controls that BLOCK (prevent) rather than merely alert. Used only for the
 # SIMULATED prevention signal; real prevention is the BAS run being blocked.
@@ -132,20 +136,82 @@ class DetectionVerifier:
             blob = ""
         return tid in blob
 
+    def _cfg(self, name: str, default: str = "") -> str:
+        return getattr(self.config, name, default) if self.config else default
+
+    def _siem_backends(self) -> list[str]:
+        """Which real SIEM backends have credentials (F3 b — multi-SIEM)."""
+        out = []
+        if self._cfg("elastic_url") and self._cfg("elastic_api_key"):
+            out.append("elastic")
+        if self._cfg("splunk_mgmt_url") and (
+                self._cfg("splunk_mgmt_token")
+                or (self._cfg("splunk_username") and self._cfg("splunk_password"))):
+            out.append("splunk")
+        if self._cfg("sentinel_resource_id") and self._cfg("sentinel_token"):
+            out.append("sentinel")
+        return out
+
     def _siem_configured(self) -> bool:
-        c = self.config
-        return bool(c and getattr(c, "elastic_url", "") and getattr(c, "elastic_api_key", ""))
+        return bool(self._siem_backends())
 
     async def _query_siem(self, tag: str | None, window: int | None) -> bool:
+        """Query EVERY configured SIEM for an alert/event carrying the deconfliction
+        tag in the window; True if ANY real control saw it (F3 b). Raises only when all
+        configured backends errored (so was_detected reports an honest siem_error)."""
+        last_error = None
+        answered = False
+        for backend in self._siem_backends():
+            try:
+                if await self._query_backend(backend, tag, window):
+                    return True
+                answered = True
+            except Exception as exc:
+                last_error = str(exc)
+        if not answered and last_error:
+            raise RuntimeError(last_error)
+        return False
+
+    async def _query_backend(self, backend: str, tag: str | None, window: int | None) -> bool:
         import httpx
-        url = getattr(self.config, "elastic_url", "").rstrip("/")
-        key = getattr(self.config, "elastic_api_key", "")
-        headers = {"Authorization": f"ApiKey {key}", "Content-Type": "application/json"}
-        query = {"query": {"match": {"message": tag or ""}}, "size": 1}
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.post(f"{url}/_search", json=query, headers=headers)
-            if resp.status_code != 200:
-                raise RuntimeError(f"SIEM query {resp.status_code}")
-            hits = resp.json().get("hits", {}).get("total", {})
-            n = hits.get("value", 0) if isinstance(hits, dict) else hits
-            return bool(n)
+        tag = tag or ""
+        win = int(window or 15)
+        if backend == "elastic":
+            url = self._cfg("elastic_url").rstrip("/")
+            headers = {"Authorization": f"ApiKey {self._cfg('elastic_api_key')}",
+                       "Content-Type": "application/json"}
+            query = {"query": {"match": {"message": tag}}, "size": 1}
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post(f"{url}/_search", json=query, headers=headers)
+                if resp.status_code != 200:
+                    raise RuntimeError(f"Elastic query {resp.status_code}")
+                hits = resp.json().get("hits", {}).get("total", {})
+                n = hits.get("value", 0) if isinstance(hits, dict) else hits
+                return bool(n)
+        if backend == "splunk":
+            url = self._cfg("splunk_mgmt_url").rstrip("/")
+            token = self._cfg("splunk_mgmt_token")
+            headers = {"Authorization": f"Bearer {token}"} if token else {}
+            auth = None if token else (self._cfg("splunk_username"), self._cfg("splunk_password"))
+            data = {"search": f'search "{tag}" earliest=-{win}m', "output_mode": "json",
+                    "exec_mode": "oneshot"}
+            async with httpx.AsyncClient(timeout=20.0, verify=False) as client:
+                resp = await client.post(f"{url}/services/search/jobs/export",
+                                         data=data, headers=headers, auth=auth)
+                if resp.status_code != 200:
+                    raise RuntimeError(f"Splunk query {resp.status_code}")
+                # A oneshot export streams one JSON object per matching result row.
+                return '"result"' in resp.text or (bool(tag) and tag in resp.text)
+        if backend == "sentinel":
+            scope = self._cfg("sentinel_resource_id").rstrip("/")
+            headers = {"Authorization": f"Bearer {self._cfg('sentinel_token')}",
+                       "Content-Type": "application/json"}
+            body = {"query": f'search "{tag}" | take 1'}
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                resp = await client.post(f"{_ARM}{scope}/query?api-version=2017-10-01",
+                                         json=body, headers=headers)
+                if resp.status_code != 200:
+                    raise RuntimeError(f"Sentinel query {resp.status_code}")
+                tables = resp.json().get("tables", [])
+                return any(t.get("rows") for t in tables)
+        raise RuntimeError(f"unknown SIEM backend {backend}")

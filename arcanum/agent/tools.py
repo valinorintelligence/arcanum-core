@@ -1996,16 +1996,17 @@ NATIVE_TOOLS: list[dict] = [
         "type": "function",
         "function": {
             "name": "capture_proof",
-            "description": "RED TEAM (F1, PASSIVE): Standardize a piece of evidence (confirmed shell / command output / masked sample) into an auditable proof record. Scrubs inline credentials and stamps a sha256 of the original. Use to attach proof to a finding.",
+            "description": "RED TEAM (F1, PASSIVE): Standardize a piece of evidence (confirmed shell / command output / masked sample) into an auditable proof record. Scrubs inline credentials and stamps a sha256 of the original. With proof_type='screenshot' and a url, captures a screenshot of the target as visual proof (honest 'unavailable' if Playwright isn't installed). Use to attach proof to a finding.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "proof_type": {"type": "string", "description": "shell | output | vuln_confirmation | sample (default 'output')."},
-                    "content": {"type": "string", "description": "The raw evidence text (will be masked for storage)."},
+                    "proof_type": {"type": "string", "description": "shell | output | vuln_confirmation | sample | screenshot (default 'output')."},
+                    "content": {"type": "string", "description": "The raw evidence text (will be masked for storage). Not needed for screenshot."},
+                    "url": {"type": "string", "description": "For proof_type='screenshot': the target URL to capture."},
                     "note": {"type": "string", "description": "Short human summary of what the proof demonstrates."},
                     "deconfliction_tag": {"type": "string", "description": "Optional engagement deconfliction tag."},
                 },
-                "required": ["content"],
+                "required": [],
             },
         },
     },
@@ -5350,10 +5351,11 @@ class ToolExecutor:
 
     async def _handle_run_bas_test(
         self, technique_id: str = "", tactic: str = "", command: str = "",
-        campaign_id: str = "", auto_tune: bool = True, **kwargs,
+        campaign_id: str = "", auto_tune: bool = True, use_atomics: bool = False, **kwargs,
     ) -> dict:
         """PURPLE: run (or honestly simulate) an ATT&CK technique and MEASURE whether
-        it is detected; on a miss, auto-tune (deploy a detection rule) and re-measure."""
+        it is detected; on a miss, auto-tune (deploy a detection rule) and re-measure.
+        ``use_atomics`` runs the real Atomic Red Team test in the sandbox (F3 a)."""
         if self.db is None:
             return {"error": "Banco indisponível — BAS requer persistência (resultados medidos)."}
         if not technique_id:
@@ -5363,7 +5365,8 @@ class ToolExecutor:
         loop = PurpleLoop(self.db, config=get_config(), sandbox=self.sandbox, session_id=self.session_id)
         return await loop.close_gap(technique_id, campaign_id=campaign_id or None,
                                     tactic=tactic or None, command=command or None,
-                                    auto_tune=self._bool(auto_tune))
+                                    auto_tune=self._bool(auto_tune),
+                                    use_atomics=self._bool(use_atomics))
 
     async def _handle_verify_detection(
         self, technique_id: str = "", tag: str = "", window: int = None, **kwargs,
@@ -5392,10 +5395,12 @@ class ToolExecutor:
         return cov
 
     async def _handle_run_purple_campaign(
-        self, techniques=None, auto_tune: bool = True, campaign_id: str = "", **kwargs,
+        self, techniques=None, auto_tune: bool = True, campaign_id: str = "",
+        use_atomics: bool = False, **kwargs,
     ) -> dict:
         """PURPLE: run a chain of ATT&CK techniques, measure end-to-end coverage and
-        report gaps (auto-tuning on misses when auto_tune=true)."""
+        report gaps (auto-tuning on misses when auto_tune=true). ``use_atomics`` runs
+        the real Atomic Red Team tests in the sandbox (F3 a)."""
         if self.db is None:
             return {"error": "Banco indisponível — campanha requer persistência."}
         if isinstance(techniques, str):
@@ -5405,7 +5410,8 @@ class ToolExecutor:
         from ..purple.campaign import PurpleCampaign
         from ..core.config import get_config
         camp = PurpleCampaign(self.db, config=get_config(), sandbox=self.sandbox, session_id=self.session_id)
-        return await camp.run(techniques, auto_tune=self._bool(auto_tune), campaign_id=campaign_id or None)
+        return await camp.run(techniques, auto_tune=self._bool(auto_tune),
+                              campaign_id=campaign_id or None, use_atomics=self._bool(use_atomics))
 
     # -- Offensive F1 (initial access): governed wrappers --------------------
     # These DELEGATE to established tools in the sandbox (no exploit in the repo).
@@ -5494,10 +5500,15 @@ class ToolExecutor:
 
     async def _handle_capture_proof(
         self, proof_type: str = "output", content: str = "", note: str = "",
-        deconfliction_tag: str = "", **kwargs,
+        deconfliction_tag: str = "", url: str = "", **kwargs,
     ) -> dict:
-        """F1 (PASSIVE): standardize evidence into a masked, hash-stamped proof record."""
-        from ..offensive.proof import build_proof
+        """F1 (PASSIVE): standardize evidence into a masked, hash-stamped proof record.
+        With proof_type='screenshot' + a url, captures a screenshot via the headless
+        browser (honest 'unavailable' if Playwright isn't installed)."""
+        from ..offensive.proof import build_proof, capture_screenshot
+        if proof_type == "screenshot" and url:
+            return await capture_screenshot(url, self.workspace_dir,
+                                            deconfliction_tag=deconfliction_tag or None)
         return build_proof(proof_type or "output", content or "",
                            note=note or None, deconfliction_tag=deconfliction_tag or None)
 
