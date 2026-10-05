@@ -111,6 +111,16 @@ class ArcanumConfig(BaseSettings):
     # box. Set a fixed value for remote/proxied deployments.
     api_token: str = ""
 
+    # ROE signing secret (F0 #6). Engagements are signed with HMAC-SHA256 over this
+    # secret so a ROE cannot be forged or tampered without it (a plain content hash
+    # anyone could recompute). Empty => a random secret is generated once and
+    # persisted at ~/.arcanum/roe_secret.txt. Set a fixed value for multi-host setups.
+    roe_secret: str = ""
+    # When true, the engine only honors engagements whose HMAC signature verifies —
+    # legacy/unsigned engagements are NOT trusted. Default false keeps backward-compat
+    # (unsigned legacy engagements still work; a tampered/forged signature is always rejected).
+    require_signed_roe: bool = False
+
     # Demo data is seeded only when this is true (never silently in prod).
     seed_demo: bool = False
 

@@ -203,7 +203,9 @@ CREATE TABLE IF NOT EXISTS engagements (
     allowed_classes TEXT,         -- JSON list of ActionClass values
     window_start DATETIME,
     window_end DATETIME,
-    roe_hash TEXT NOT NULL,       -- tamper-evidence hash of the contract
+    roe_hash TEXT NOT NULL,       -- tamper-evidence CONTENT hash of the contract (sha256)
+    roe_sig TEXT,                 -- HMAC-SHA256 signature of the contract (F0 #6): unforgeable
+                                  -- without the server ROE secret. NULL = legacy/unsigned.
     status TEXT DEFAULT 'active', -- active | closed
     operator TEXT,
     auto_approve INTEGER DEFAULT 0, -- 1 = full-scope LAB ROE: the signed engagement pre-authorizes
@@ -426,6 +428,8 @@ class Database:
             if ecols and "auto_approve" not in ecols:
                 await self._conn.execute(
                     "ALTER TABLE engagements ADD COLUMN auto_approve INTEGER DEFAULT 0")
+            if ecols and "roe_sig" not in ecols:  # F0 #6: HMAC signature column
+                await self._conn.execute("ALTER TABLE engagements ADD COLUMN roe_sig TEXT")
             await self._conn.commit()
         except Exception:
             pass

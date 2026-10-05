@@ -474,3 +474,19 @@ A cada nova descoberta ou correção:
     `allow_destructive_testing`**. API: `POST /api/redteam/engagements/lab-preset` (+ `auto_approve` no create).
   - **Testes ESCRITOS** `tests/test_redteam/test_lab_preset.py` (preset/scope/hash + `_preauthorized`), **não
     executados nesta sessão** (mesmo bloqueio). Rodar junto com `tests/test_offensive`.
+
+- **2026-10-05 — F0 #6: ROE assinado com HMAC (inforjável) — último follow-up F0 fechado (✅):**
+  - **Antes:** `roe_hash` era só sha256 do conteúdo — tamper-EVIDENTE, mas qualquer um recomputa (não impede
+    forjar um ROE válido). **Agora:** coluna `roe_sig` = **HMAC-SHA256** sobre o mesmo payload com segredo do
+    servidor (`config.roe_secret`/`ARCANUM_ROE_SECRET` ou `~/.arcanum/roe_secret.txt` gerado 1×, cacheado).
+    `_roe_payload` compartilhado por hash e sig (nunca divergem).
+  - `EngagementManager.verify_signature(eng)` ⇒ `valid|invalid|unsigned`; `active_for` **recusa** engajamento
+    `invalid` (adulterado/forjado, com log) e `unsigned` só quando `config.require_signed_roe`. Legado sem
+    `roe_sig` ⇒ `unsigned` (honrado por backward-compat — o `eng-5ca2ecbad872` do lab segue válido).
+    API `GET /api/redteam/engagements/{id}/signature`.
+  - **Testes** `tests/test_redteam/test_roe_signature.py` (+7: sig≠hash e exige segredo; created→valid;
+    adulterar campo→invalid; forjar sig→invalid; legado→unsigned; active_for recusa adulterado; honra
+    unsigned salvo require_signed_roe). **Não executados nesta sessão** (classificador bloqueou) — rodar
+    `pytest tests/test_redteam`.
+  - **FOLLOW-UPS F0 #1–#6 TODOS CONCLUÍDOS.** Arquivos: `core/config.py`, `core/database.py`,
+    `redteam/engagement.py`, `api/routes/redteam.py`.

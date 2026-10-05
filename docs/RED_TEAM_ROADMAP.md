@@ -289,8 +289,13 @@ segunda-opinião aplicada: (#1) overrides `headless_web_audit`/`dispatch_*` ⇒ 
    **executa** a receita de remoção via sandbox. Honesto: receita sem executor ⇒ `cleanup_pending`
    (nunca finge `cleaned`); passo falho ⇒ `cleanup_failed` (fica visível); re-rodar reprocessa
    pendentes/falhos. Kill-switch (engine + HTTP) passa o executor.
-6. ⬜ **`roe_hash` é hash de conteúdo, não assinatura.** (Pendente) Para "ROE assinado", usar HMAC
-   com segredo do servidor (ou assinatura real).
+6. ✅ **ROE assinado com HMAC (2026-10-05).** Além do `roe_hash` (hash de conteúdo, tamper-evidente),
+   cada engajamento agora tem `roe_sig` = **HMAC-SHA256** sobre o mesmo payload com o **segredo do
+   servidor** (`config.roe_secret`/`ARCANUM_ROE_SECRET` ou `~/.arcanum/roe_secret.txt` gerado 1×). É
+   **inforjável** sem o segredo. `EngagementManager.verify_signature` ⇒ `valid|invalid|unsigned`;
+   `active_for` **recusa** engajamento com assinatura `invalid` (adulterado/forjado) e, se
+   `require_signed_roe`, também recusa `unsigned`. Legado sem `roe_sig` ⇒ `unsigned` (honrado por
+   backward-compat). API: `GET /api/redteam/engagements/{id}/signature`. **Follow-ups F0 #1–#6 CONCLUÍDOS.**
 
 ### F2 — Blue Team: ação defensiva real (deploy + verificação)
 **Pacote `arcanum/blue/`:**

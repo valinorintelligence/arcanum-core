@@ -13,12 +13,55 @@ the engine still applying). An engagement only ever *restricts* further.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
+import logging
+import os
+import secrets
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from .action_classes import ActionClass
+
+logger = logging.getLogger("arcanum")
+
+_ROE_SECRET_CACHE: str | None = None
+
+
+def _resolve_roe_secret() -> str:
+    """Resolve the server ROE signing secret (F0 #6), cached per process.
+
+    Order: config.roe_secret / ARCANUM_ROE_SECRET env → persisted
+    ``~/.arcanum/roe_secret.txt`` (generated once) → a process-ephemeral secret as a
+    last resort. The secret never leaves the server; without it a ROE signature cannot
+    be forged."""
+    global _ROE_SECRET_CACHE
+    if _ROE_SECRET_CACHE:
+        return _ROE_SECRET_CACHE
+    secret = ""
+    try:
+        from ..core.config import get_config
+        secret = (get_config().roe_secret or "").strip()
+    except Exception:
+        secret = ""
+    if not secret:
+        secret = os.environ.get("ARCANUM_ROE_SECRET", "").strip()
+    if not secret:
+        path = Path.home() / ".arcanum" / "roe_secret.txt"
+        try:
+            if path.exists():
+                secret = path.read_text(encoding="utf-8").strip()
+            if not secret:
+                secret = secrets.token_urlsafe(48)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(secret, encoding="utf-8")
+        except Exception:
+            if not secret:
+                secret = secrets.token_urlsafe(48)  # ephemeral, still unforgeable in-process
+    _ROE_SECRET_CACHE = secret
+    return secret
 
 
 def _now() -> datetime:
@@ -60,11 +103,11 @@ class EngagementManager:
     # -- helpers ------------------------------------------------------------
 
     @staticmethod
-    def compute_roe_hash(name: str, scope: list, allowed_classes: list,
-                         window_start: Any, window_end: Any, auto_approve: bool = False) -> str:
-        """Deterministic hash of the ROE contract (tamper-evidence). ``auto_approve``
-        is part of the contract (it waives the per-action HITL pause), so it is covered."""
-        payload = json.dumps(
+    def _roe_payload(name: str, scope: list, allowed_classes: list,
+                     window_start: Any, window_end: Any, auto_approve: bool = False) -> str:
+        """Canonical JSON of the ROE contract (shared by the content hash and the HMAC
+        signature so they can never drift). ``auto_approve`` is part of the contract."""
+        return json.dumps(
             {
                 "name": name or "",
                 "scope": sorted([str(s).lower() for s in (scope or [])]),
@@ -76,7 +119,41 @@ class EngagementManager:
             sort_keys=True,
             ensure_ascii=False,
         )
+
+    @staticmethod
+    def compute_roe_hash(name: str, scope: list, allowed_classes: list,
+                         window_start: Any, window_end: Any, auto_approve: bool = False) -> str:
+        """Deterministic CONTENT hash of the ROE contract (tamper-evidence). Anyone can
+        recompute it — for unforgeability use :meth:`compute_roe_sig` (F0 #6)."""
+        payload = EngagementManager._roe_payload(
+            name, scope, allowed_classes, window_start, window_end, auto_approve)
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def compute_roe_sig(name: str, scope: list, allowed_classes: list,
+                        window_start: Any, window_end: Any, auto_approve: bool = False,
+                        secret: str | None = None) -> str:
+        """HMAC-SHA256 signature of the ROE contract (F0 #6). Unforgeable without the
+        server secret, so a ROE row cannot be fabricated or altered and still verify."""
+        payload = EngagementManager._roe_payload(
+            name, scope, allowed_classes, window_start, window_end, auto_approve)
+        key = (secret if secret is not None else _resolve_roe_secret()).encode("utf-8")
+        return hmac.new(key, payload.encode("utf-8"), hashlib.sha256).hexdigest()
+
+    @staticmethod
+    def verify_signature(engagement: dict | None) -> str:
+        """Return ``'valid'`` | ``'invalid'`` | ``'unsigned'`` for an engagement's HMAC
+        signature. Recomputes from the stored fields and compares in constant time."""
+        if not engagement:
+            return "unsigned"
+        sig = engagement.get("roe_sig")
+        if not sig:
+            return "unsigned"
+        expected = EngagementManager.compute_roe_sig(
+            engagement.get("name"), engagement.get("scope"), engagement.get("allowed_classes"),
+            engagement.get("window_start"), engagement.get("window_end"),
+            bool(engagement.get("auto_approve")))
+        return "valid" if hmac.compare_digest(str(sig), expected) else "invalid"
 
     # -- CRUD ---------------------------------------------------------------
 
@@ -110,20 +187,21 @@ class EngagementManager:
         ws = _parse_dt(window_start)
         we = _parse_dt(window_end)
         eid = "eng-" + uuid.uuid4().hex[:12]
-        roe_hash = self.compute_roe_hash(
-            name, scope, classes, ws.isoformat() if ws else "", we.isoformat() if we else "",
-            auto_approve=bool(auto_approve))
+        wsi = ws.isoformat() if ws else ""
+        wei = we.isoformat() if we else ""
+        roe_hash = self.compute_roe_hash(name, scope, classes, wsi, wei, auto_approve=bool(auto_approve))
+        roe_sig = self.compute_roe_sig(name, scope, classes, wsi, wei, auto_approve=bool(auto_approve))
         now = _now().isoformat()
 
         await self.db.execute(
             """INSERT INTO engagements
                (id, name, session_id, scope, allowed_classes, window_start, window_end,
-                roe_hash, status, operator, auto_approve, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)""",
+                roe_hash, roe_sig, status, operator, auto_approve, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)""",
             (
                 eid, name, session_id, json.dumps(scope), json.dumps(classes),
                 ws.isoformat() if ws else None, we.isoformat() if we else None,
-                roe_hash, operator, 1 if auto_approve else 0, now,
+                roe_hash, roe_sig, operator, 1 if auto_approve else 0, now,
             ),
         )
         return await self.get(eid)
@@ -182,6 +260,27 @@ class EngagementManager:
         candidates = [self._decorate(r) for r in rows]
         # non-expired only
         live = [e for e in candidates if not self.is_expired(e)]
+        # ROE signature enforcement (F0 #6): a tampered/forged signature is NEVER
+        # trusted; unsigned legacy engagements are honored unless require_signed_roe.
+        require_signed = False
+        try:
+            from ..core.config import get_config
+            require_signed = bool(get_config().require_signed_roe)
+        except Exception:
+            require_signed = False
+        kept = []
+        for e in live:
+            status = self.verify_signature(e)
+            if status == "invalid":
+                logger.warning("Engagement %s rejected: ROE signature invalid (tampered/forged).",
+                               e.get("id"))
+                continue
+            if status == "unsigned" and require_signed:
+                logger.warning("Engagement %s rejected: unsigned ROE and require_signed_roe is on.",
+                               e.get("id"))
+                continue
+            kept.append(e)
+        live = kept
         if session_id:
             for e in live:
                 if e.get("session_id") == session_id:

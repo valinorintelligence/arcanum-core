@@ -121,6 +121,11 @@
 - **Âncora anti-truncamento (follow-up #4).** `audit_anchor` (count + último hash, atualizada sob o lock
   do append) faz `verify_chain` detectar **remoção da cauda**, não só edição de linha. **Nunca**
   `UPDATE/DELETE` em `actions_log` nem em `audit_anchor`.
+- **ROE assinado com HMAC (follow-up #6).** Engajamento tem `roe_hash` (conteúdo) **e** `roe_sig` =
+  HMAC-SHA256 com segredo do servidor (`_resolve_roe_secret`: config/env ou `~/.arcanum/roe_secret.txt`),
+  inforjável sem o segredo. `EngagementManager.verify_signature` ⇒ `valid|invalid|unsigned`; **`active_for`
+  recusa `invalid`** (adulterado/forjado), e `unsigned` só quando `require_signed_roe`. Hash e sig derivam
+  do mesmo `_roe_payload` (nunca divergem). **Nunca** editar `engagements` por fora — invalida a assinatura.
 - **Teardown real no cleanup (follow-up #5).** `create_foothold(teardown_recipe=[...])` +
   `SessionRegistry.cleanup(executor=...)` **executa** a remoção via sandbox. Honesto: receita sem executor
   ⇒ `cleanup_pending` (nunca finge `cleaned`); passo falho ⇒ `cleanup_failed` (fica visível); re-rodar
@@ -220,8 +225,10 @@ validadas ao vivo (ROADMAP §10; seções "Governança de ação (F0)", "Blue Te
 do classificador — rodar `pytest tests/test_offensive`). **Ofensivo F1+F4+F5 ✅ implementados** (framework
 governado `arcanum/offensive/`, delega ao Kali, gated por ROE/dupla aprovação; `impact_poc` OFF por padrão).
 Execução real exige lab autorizado + Docker/sandbox + ROE (operador).
-**Hardening de segurança (2026-10-05):** follow-ups F0 #1–#5 resolvidos (fail-closed audit, regra de
-dois com identidade, âncora anti-truncamento, teardown real no cleanup) + F2 (c) verify real WAF/EDR +
-F3 (d) prevenção≠detecção. **F1 ✅** (2026-10-05, `arcanum/offensive/`). Pendentes: F0 #6
-(roe_hash→HMAC assinado), F2 (a)/(b) (apply SSH, Splunk/Sentinel reais), F3 (a)/(b)/(c) (Atomic Red
-Team real [gated], multi-SIEM, agendamento CTEM), **F4/F5** (pós-exploração/impacto — gated).
+**Hardening de segurança (2026-10-05):** **follow-ups F0 #1–#6 TODOS resolvidos** (fail-closed audit,
+regra de dois com identidade, âncora anti-truncamento, teardown real, **ROE assinado com HMAC**) +
+F2 (c) verify real WAF/EDR + F3 (d) prevenção≠detecção. **F1/F4/F5 ✅** (`arcanum/offensive/`) +
+**lab-preset auto_approve**. Validado AO VIVO contra DVWA (foothold `uid=www-data`, audit
+`executed_preauthorized` + chain `valid`, kill-switch cleanup). Pendentes: F2 (a)/(b) (apply SSH,
+Splunk/Sentinel reais), F3 (a)/(b)/(c) (Atomic Red Team real [gated], multi-SIEM, agendamento CTEM);
+screenshot como prova (F1); lab multi-host (AD) p/ exercitar F4 lateral/C2 e F5 a fundo.

@@ -121,6 +121,18 @@ async def get_engagement(request: Request, engagement_id: str):
     return {"engagement": eng}
 
 
+@router.get("/engagements/{engagement_id}/signature")
+async def verify_engagement_signature(request: Request, engagement_id: str):
+    """Verify the engagement's HMAC ROE signature (F0 #6): 'valid' | 'invalid' | 'unsigned'.
+    'invalid' means the stored ROE was tampered with or forged (recomputed HMAC mismatch)."""
+    mgr = EngagementManager(request.app.state.db)
+    eng = await mgr.get(engagement_id)
+    if not eng:
+        raise HTTPException(404, "engagement not found")
+    status = mgr.verify_signature(eng)
+    return {"engagement_id": engagement_id, "signature": status, "signed": bool(eng.get("roe_sig"))}
+
+
 @router.post("/engagements/{engagement_id}/close")
 async def close_engagement(request: Request, engagement_id: str):
     mgr = EngagementManager(request.app.state.db)
