@@ -83,9 +83,80 @@
 - **Hardening a preservar:** `_handle_execute` recusa rodar sem sandbox (sem RCE no host); escopo é
   verificado de forma determinística; reports usam autoescape anti-XSS; API/WS exigem token.
 
+### Governança de ação (F0 — `arcanum/redteam/`)
+- **Classificação determinística, nunca confiada ao modelo.** Toda tool call é classificada por
+  `redteam/action_classes.classify` em `PASSIVE|ACTIVE|EXPLOIT|POST_EXPLOIT|DESTRUCTIVE`. Regra:
+  `audit_*/query_*/search_*/…` → PASSIVE; `execute` → ACTIVE com upgrade por heurística de comando
+  (sqlmap `--dump`/hydra/metasploit/mimikatz… → EXPLOIT; `rm -rf`/`mkfs`/`shutdown`… → DESTRUCTIVE);
+  tool desconhecida ⇒ ACTIVE (nunca PASSIVE silencioso).
+  **Side-effect vence o prefixo:** `headless_web_audit` (dirige browser no alvo) e `dispatch_*`
+  (Jira/SIEM, probe remoto) têm override explícito em `TOOL_ACTION_CLASS` ⇒ **ACTIVE** (apesar do
+  nome parecer passivo). Ao adicionar tool com efeito externo, **adicione o override** — não confie
+  no prefixo.
+- **ROE bloqueia determinismicamente.** Se há engajamento ativo (`EngagementManager.active_for`) e a
+  classe/janela/escopo não são permitidos, `engine._roe_authorize` **bloqueia** (evento
+  `blocked_by_roe`) e **registra** no audit. **Sem engajamento ativo ⇒ não bloqueia** (backward-compat;
+  o escopo determinístico do engine continua valendo em separado).
+- **HITL por classe.** PASSIVE=auto · ACTIVE=1 aprovação · EXPLOIT/POST_EXPLOIT/DESTRUCTIVE=**dupla
+  aprovação** (`execute_approved` re-arma o pending até 2 confirmações). *(Follow-up: ainda não há
+  identidade p/ "aprovadores independentes" — ver ROADMAP §10 F0.)*
+- **Audit log imutável e encadeado.** `redteam/audit.ActionAuditLog.record` é **append-only** com
+  `entry_hash=sha256(prev_hash+payload)` (lock por conexão garante a seção crítica). **Nunca** fazer
+  `UPDATE`/`DELETE` em `actions_log`; `verify_chain()` detecta adulteração.
+- **Mascaramento por chave E por valor.** `mask_arguments` redige por nome de chave **e** escaneia
+  valores (inclusive `command`) por credencial inline (`sshpass -p`, `--password=`, userinfo de URL
+  `user:pass@`, `Bearer …`), **sem** destruir dado benigno (`nmap -p 80` é preservado). Segredo nunca
+  entra em claro no log.
+- **Kill-switch global.** `POST /api/redteam/killswitch` aborta todos os runs + `SessionRegistry.cleanup()`
+  encerra todos os footholds/implantes; `engine.kill_switch()` faz o mesmo p/ um engajamento. Cleanup
+  é **obrigatório** no encerramento.
+- **Ofensivo (F1/F4/F5) só com alvo autorizado + ROE assinado.** Não implementar wrappers ofensivos
+  sem lab autorizado próprio, Docker/sandbox ligados e decisão de HITL/modelo (ver ROADMAP §6/§11).
+
+### Blue Team (F2 — `arcanum/blue/`)
+- **Toda ação defensiva real é registrada p/ rollback.** `DeploymentRegistry` (tabela
+  `blue_deployments`) é a fonte de verdade do que o Blue mudou e se ainda está ativo. `deploy`→
+  `verify`→`rollback` (deployers SIEM/WAF/EDR), `apply`→`verify`→`rollback` (hardening) e `contain`→
+  `revert` (IR) **sempre** gravam no registry. Nada de mudança defensiva sem registro reversível.
+- **Mock honesto (mesma regra do `jira.py`).** Sem credenciais, o adapter opera em mock
+  (`mock:true`, `status:'active'`) e **nunca** finge um deploy real; Splunk HEC/Datadog reportam
+  "não suportado" em vez de simular. Deploy real: Elastic (SIEM), endpoints admin opt-in (WAF/EDR).
+- **`apply_hardening` é dry-run por padrão.** Só aplica com `dry_run=false` **após** aprovação do
+  operador (classe ACTIVE → HITL). Consome a saída de `generate_hardening_baseline`
+  (`target_config_file`/`hardening_snippet`) — ao mudar o shape do gerador, atualizar o mapeamento.
+- **Classes F0 das tools Blue:** `deploy_detection_rule`/`apply_hardening`/`ir_contain` = **ACTIVE**
+  (aprovação + audit + rollback); `verify_detection_active` = **PASSIVE**. Registradas em
+  `TOOL_ACTION_CLASS` (override vence prefixo).
+
+### Purple Team (F3 — `arcanum/purple/`)
+- **Eficácia é MEDIDA, não seed.** O loop grava cada run+veredito em `purple_results`
+  (`PurpleResultStore`); `measured_efficacy_report` e `apply_measured_results` derivam a eficácia da
+  medição real e sobrescrevem o seed estático do `MitreEfficacyEngine`. Nunca reportar o seed como
+  se fosse medição.
+- **Detecção nunca é fabricada — e simulado nunca vira real.** `DetectionVerifier.was_detected` mede
+  a partir de **regras ativas implantadas (registry F2)** cobrindo a técnica + consulta SIEM real
+  opcional. Sem cobertura ⇒ MISS honesto. **Regra crítica (fix F3 2ª opinião):** um deploy sem
+  credenciais é **mock** — conta como `source='deployed_rule_simulated'`, `simulated=True`
+  (cobertura SIMULADA), **nunca** como detecção real; um deploy real vence o mock. `detection_rate_real`
+  (controles reais) é separado de `coverage_simulated` (mock); `apply_measured_results` só marca
+  DETECTED no MITRE para detecção REAL (simulada ⇒ MISSED, com log). Ao tocar verify/efficacy/loop,
+  preserve essa separação real-vs-simulado (invariante anti-"mock silencioso").
+- **BAS não finge execução.** `BASRunner` executa no sandbox autorizado OU **simula honestamente**
+  (`execution_status='simulated'`) sem sandbox — nunca alega execução real nem cria artefatos falsos.
+  Toda execução carimba **deconfliction tag** (`ARCANUM-BAS:<camp>:<tid>`).
+- **Emulação é EXPLOIT (gated).** `run_bas_test`/`run_purple_campaign` = EXPLOIT (ROE + dupla
+  aprovação); `verify_detection`/`measure_coverage` = PASSIVE. A API Purple é **read-only** — execução
+  só pelos tools governados (nunca um endpoint HTTP dispara emulação).
+
 ### Estado (ver MASTERPLAN §9)
 P0 ✅, P1 ✅ (exceto TUI), P2 ✅ (valor). Lentidão/freeze: mitigado (flash-attn+KV q8 no Ollama,
 `keep_alive=30m`, `num_thread` auto deixando ~2 núcleos livres). `orchestrator.py` removido.
 **Skills:** as 57 skills de `agent/skills.py` agora são **semeadas no PlaybookManager**
 (`ensure_skill_playbooks`) e usadas via **recall semântico (RAG/FTS)** — não injetadas no prompt.
 **TUI:** ainda é stub experimental — o **Web UI é o produto** (a TUI não conecta o engine).
+**Red Team F0 ✅** (governança: ROE + classes de ação + HITL + audit imutável + kill-switch) +
+**F2 ✅** (Blue real: deploy/verify/rollback, hardening dry-run, IR reversível) + **F3 ✅** (Purple
+loop fechado: BAS medido → detectar → tunar → re-medir, eficácia medida ≠ seed) implementadas e
+validadas ao vivo (ROADMAP §10; seções "Governança de ação (F0)", "Blue Team (F2)" e "Purple Team
+(F3)" acima). **463 testes verdes.** Ofensivo (F1/F4/F5) **não** implementado (gated — exige alvo
+autorizado + ROE + Docker/sandbox + decisão de HITL/modelo).

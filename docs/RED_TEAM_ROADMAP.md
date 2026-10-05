@@ -260,6 +260,30 @@ EXPLOIT/DESTRUCTIVE dupla aprovação); pós-execução `audit.record(...)` (arg
 **Aceite:** engajamento `[PASSIVE,ACTIVE]` → tool EXPLOIT bloqueada+logada; audit chain íntegro;
 kill-switch encerra sessões; 394 + novos testes verdes.
 
+#### F0 — Status: ✅ IMPLEMENTADO E VALIDADO AO VIVO (2026-10-04)
+Pacote `arcanum/redteam/` (`action_classes`, `engagement`, `audit`, `sessions`), tabelas
+`engagements`/`actions_log`/`redteam_sessions` + colunas `graph_nodes.owned/creds_held/foothold_id`,
+wiring no `engine.py` (`_roe_authorize` → `blocked_by_roe`, HITL por classe com **dupla aprovação**
+em `execute_approved`, `_audit_record`, `kill_switch`) e rotas `/api/redteam/*`. Revisão de
+segunda-opinião aplicada: (#1) overrides `headless_web_audit`/`dispatch_*` ⇒ ACTIVE (não PASSIVE);
+(#2) scrubbing de credencial inline por **valor** no audit (sshpass/`--password`/userinfo de URL/
+`Bearer`), preservando dados benignos (ex.: `nmap -p 80`). **427 testes verdes.** Detalhes: MASTERPLAN §9.
+
+**Follow-ups da F0 (anotados; exigem auth/decisão — não feitos agora):**
+1. **Regra de dois real:** a dupla aprovação conta 2 aprovações mas **não** verifica aprovadores
+   independentes (falta identidade de operador). Implementar quando houver autenticação de usuário;
+   por ora as mensagens dizem "dupla confirmação/aprovação", não "aprovadores independentes".
+2. **Accountability do `operator`:** hoje o campo `operator` do audit guarda o **modo**
+   (autopilot/copilot/manual), não a pessoa autenticada. Ligar à identidade quando existir auth.
+3. **`_audit_record` é fail-open** (`except: pass`). Para EXPLOIT/DESTRUCTIVE da F4/F5, avaliar
+   **fail-closed** (abortar a ação se o registro de auditoria falhar).
+4. **Truncamento de cauda:** a hash chain detecta adulteração de linhas, **não** a remoção das
+   últimas N entradas. Para alta garantia, ancorar o último hash externamente / contador esperado.
+5. **`SessionRegistry.cleanup` é bookkeeping:** marca `cleaned`, **não** remove implante real. A F4
+   deve ligar ao teardown real e guardar a "receita" de remoção por foothold.
+6. **`roe_hash` é hash de conteúdo, não assinatura.** Para "ROE assinado", usar HMAC com segredo do
+   servidor (ou assinatura real).
+
 ### F2 — Blue Team: ação defensiva real (deploy + verificação)
 **Pacote `arcanum/blue/`:**
 - `deployers/siem.py` · `edr.py` · `waf.py` — cada adapter: `deploy(rule)->{id,status}`, `verify(id)->bool`,
@@ -274,6 +298,26 @@ kill-switch encerra sessões; 394 + novos testes verdes.
 **Testes:** adapters com SIEM/WAF mockados; dry-run gera diff sem aplicar; rollback funciona; audit grava.
 **Aceite:** gerar uma regra Sigma, fazer deploy (mock ou real), confirmar que está **ativa**, e dar rollback.
 **Depende de:** F0 (+ SIEM/EDR/WAF reais ou mock p/ testes).
+
+#### F2 — Status: ✅ IMPLEMENTADO E VALIDADO AO VIVO (2026-10-04)
+Pacote `arcanum/blue/` (`registry.DeploymentRegistry` = registry de rollback na tabela
+`blue_deployments`; `deployers/{siem,waf,edr}.py` com `deploy/verify/rollback` + **mock honesto**
+sem credenciais; `hardening.HardeningApplier` com **dry-run por padrão**→diff→apply→verify→rollback;
+`response.IncidentResponder` com `isolate_host`/`disable_account`/`block_ip` reversíveis). Tools do
+agente **governadas pela F0**: `deploy_detection_rule`, `verify_detection_active`, `apply_hardening`
+(dry-run default), `ir_contain` — classe ACTIVE (`verify`=PASSIVE), com HITL + audit + rollback. API
+`/api/blue/deployments` (GET/verify/DELETE-rollback). **Validação ao vivo:** `generate_detection_rules`
+(Sigma) → `deploy_detection_rule`(SIEM, mock) → **ativa** → rollback → inativa; hardening dry-run não
+altera nada; IR reversível. **447 testes verdes** (+20 em `tests/test_blue/`). Detalhes: MASTERPLAN §9.
+
+- **Deploy real suportado hoje:** SIEM via **Elastic Detection Engine** (`ARCANUM_ELASTIC_URL`+
+  `ARCANUM_ELASTIC_API_KEY`); WAF/EDR via endpoint admin opt-in (`ARCANUM_WAF_ADMIN_URL/TOKEN`,
+  `ARCANUM_EDR_API_URL/TOKEN`). Splunk HEC/Datadog **ingerem eventos, não regras** → reportam honesto
+  "não suportado" em vez de fingir deploy. Sem credenciais ⇒ **mock honesto** (`mock:true`), nunca
+  finge deploy real.
+- **Follow-ups F2 (anotados):** (a) apply real de hardening via SSH/Ansible/PR de IaC (hoje mock
+  honesto, reversível, só registra o diff); (b) adaptadores reais p/ Splunk saved-search (REST mgmt
+  8089) e Sentinel/Chronicle; (c) `verify` real para WAF/EDR (hoje confia no registry quando mock).
 
 ### F3 — Purple Team: loop fechado (BAS medido)
 **Pacote `arcanum/purple/`:**
@@ -293,6 +337,35 @@ relatório de cobertura; audit.
 **Aceite:** rodar técnica T → medir detecção (sim/não) → se não, tunar+re-deploy+re-medir → cobertura %
 no relatório. Eficácia MEDIDA, não seed.
 **Depende de:** F0 + F2 (+ SIEM/EDR reais ou mock p/ testes).
+
+#### F3 — Status: ✅ IMPLEMENTADO E VALIDADO AO VIVO (2026-10-04)
+Pacote `arcanum/purple/` (`store.PurpleResultStore` na tabela `purple_results` = resultados MEDIDOS;
+`bas.BASRunner` executa a técnica via sandbox autorizado OU **simula honestamente** sem sandbox —
+nunca finge execução real — com **deconfliction tag**; `verify.DetectionVerifier.was_detected` mede
+detecção a partir de **regras de detecção ativas implantadas (F2)** + consulta SIEM real opcional,
+nunca fabrica veredito; `efficacy` alimenta `MitreEfficacyEngine` com resultados medidos
+(substituindo o seed); `loop.PurpleLoop.close_gap` = run→verifica→se MISS: gera+implanta regra (F2)→
+re-mede; `campaign.PurpleCampaign` encadeia técnicas, mede cobertura e gera relatório de lacunas).
+Tools governadas pela F0: `run_bas_test`/`run_purple_campaign` = **EXPLOIT** (emulação de adversário →
+ROE + dupla aprovação), `verify_detection`/`measure_coverage` = **PASSIVE**. API **read-only**
+`/api/purple/results` e `/api/purple/coverage/{id}` (execução só pelos tools governados, nunca por HTTP
+não-gated). **Validação ao vivo:** T1190 → MISS → tune (deploy de regra) → HIT; campanha multi-técnica →
+cobertura 100% após tuning; campanha sem auto-tune → lacunas medidas honestamente; eficácia
+`source=measured`. **463 testes verdes** (+16 em `tests/test_purple/`). Detalhes: MASTERPLAN §9.
+
+- **Sinal de detecção sem SIEM externo:** o verificador usa as **regras implantadas no registry da F2**
+  (regra ativa cobrindo a técnica ⇒ detectável) — sinal real do próprio sistema, não fabricado. Com
+  SIEM configurado (Elastic), também consulta alerta real pela deconfliction tag na janela.
+- **Honestidade real-vs-simulado (fix 2ª opinião, 2026-10-05):** um deploy **sem credenciais** é
+  **mock** — `was_detected` o rotula `source='deployed_rule_simulated'`/`simulated=True` (cobertura
+  SIMULADA), **nunca** detecção real; um deploy real vence o mock. As métricas separam
+  `detection_rate_real` (controles reais) de `coverage_simulated` (mock); `apply_measured_results` só
+  marca DETECTED no MITRE para detecção real (simulada ⇒ MISSED). Sem isso, cobertura mock inflava o
+  detection_rate/heatmap.
+- **Follow-ups F3 (anotados):** (a) execução real de Atomic Red Team no sandbox autorizado (hoje
+  simulação honesta sem sandbox); (b) correlação de detecção por alerta real multi-SIEM
+  (Splunk/Sentinel/Chronicle); (c) agendar campanhas recorrentes via CTEM daemon; (d) distinguir
+  PREVENÇÃO (bloqueio por WAF/EDR) de DETECÇÃO na métrica (hoje mede detecção).
 
 ---
 

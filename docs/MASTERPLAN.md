@@ -273,3 +273,118 @@ A cada nova descoberta ou correção:
   - **Estado final:** P0 ✅ · P1 ✅ (TUI = stub honesto documentado) · P2 ✅ · Lentidão ✅ · Skills ✅.
     ~14 commits (86e8749→c85bb2d). Backlog opcional: build completo da TUI (precisa teste interativo),
     sweep dos ~120 `except...pass` (baixo valor).
+- **2026-10-04 — Red Team F0 (fundação de segurança/governança) implementada e validada ao vivo (✅):**
+  - **Pacote `arcanum/redteam/`:** `action_classes.py` (enum `ActionClass` PASSIVE→DESTRUCTIVE,
+    `classify` determinístico com heurística de comando do `execute`, `hitl_tier`), `engagement.py`
+    (`EngagementManager`: ROE com escopo/janela/classes + `roe_hash`, `active_for`, `is_allowed` puro;
+    **sem engajamento ativo ⇒ não bloqueia**, backward-compat), `audit.py` (`ActionAuditLog`
+    append-only com hash encadeado `sha256(prev+payload)`, `verify_chain`, lock por conexão,
+    mascaramento por chave **e** por valor), `sessions.py` (`SessionRegistry` footholds/implantes +
+    `cleanup`).
+  - **DB (`core/database.py`):** novas tabelas `engagements`, `actions_log`, `redteam_sessions`;
+    migração idempotente das colunas `graph_nodes.owned/creds_held/foothold_id`.
+  - **Engine (`agent/engine.py`):** `_roe_authorize` bloqueia classes fora do ROE (evento
+    `blocked_by_roe`) e registra no audit; classe → tier HITL (ACTIVE=1 aprovação,
+    EXPLOIT/POST_EXPLOIT/DESTRUCTIVE=**dupla aprovação** em `execute_approved`); `_audit_record`
+    pós-execução (args mascarados); `kill_switch()` (abort + cleanup). Governança é **best-effort**
+    (degrada a no-op sem DB usável — mocks/legado seguem funcionando).
+  - **API (`api/routes/redteam.py`):** `POST/GET /api/redteam/engagements` (+`/active`, `/{id}`,
+    `/{id}/close`), `GET /api/redteam/actions` (+`/verify`), `GET/DELETE /api/redteam/sessions`,
+    `POST /api/redteam/killswitch`.
+  - **Revisão de segunda-opinião (read-only) aplicada:** (#1) **under-gating** corrigido —
+    `headless_web_audit` (dirige browser no alvo) e `dispatch_enterprise_integration`/
+    `dispatch_to_satellite_probe` (efeito externo) caíam em prefixo passivo; agora têm override
+    explícito ⇒ ACTIVE. (#2) **vazamento de credencial por valor** no audit corrigido — além do
+    masking por nome de chave, `mask_arguments` escaneia valores (inclusive `command`) e redige
+    `sshpass -p …`, `--password=…`, userinfo de URL `user:pass@host` e `Bearer …`, **preservando**
+    dado benigno (`nmap -p 80,443` intacto). Follow-ups #3–#8 (regra-de-dois com identidade,
+    accountability do `operator`, fail-closed p/ EXPLOIT/DESTRUCTIVE, truncamento de cauda, teardown
+    real no cleanup, HMAC no `roe_hash`) **anotados** na seção F0 do `RED_TEAM_ROADMAP.md`.
+  - **Testes:** +33 em `tests/test_redteam/` (classes de ação, ROE/audit/sessions, gating no engine,
+    API, e regressões dos fixes #1/#2). Suíte: **394 → 427 verdes** (`pytest -m "not integration"`).
+  - **VALIDAÇÃO AO VIVO** (rotas reais + DB on-disk + engine real): engajamento `[passive,active]` →
+    EXPLOIT (msfconsole) e DESTRUCTIVE (`rm -rf`) **bloqueados e logados**; PASSIVE/ACTIVE liberados;
+    cadeia de audit **íntegra** (`verify valid=True`); `sshpass -p ***REDACTED***` no log (senha não
+    vazou); kill-switch **encerrou o foothold** (sessions_cleaned=1) com a cadeia ainda válida.
+  - **Próximo:** F2 (Blue real: deploy Sigma/YARA/ModSec + verificação + rollback) → F3 (Purple loop).
+    Ofensivo F1/F4/F5 permanece **gated** (exige alvo autorizado + ROE).
+- **2026-10-04 — Red Team F2 (Blue Team: ação defensiva real) implementada e validada ao vivo (✅):**
+  - **Pacote `arcanum/blue/`:** `registry.DeploymentRegistry` (registry de rollback na nova tabela
+    `blue_deployments`: toda mudança defensiva — deploy de regra, hardening, IR — é registrada p/
+    verificar e **reverter**); `deployers/{siem,waf,edr}.py` (`deploy`→`verify`→`rollback` com **mock
+    honesto** quando sem credenciais, no padrão `jira.py`: `mock:true`, **nunca** finge deploy real);
+    `hardening.HardeningApplier` (**dry-run por padrão** → diff → apply → verify → rollback);
+    `response.IncidentResponder` (`isolate_host`/`disable_account`/`block_ip`, reversíveis).
+  - **Tools do agente (governadas pela F0):** `deploy_detection_rule`, `verify_detection_active`,
+    `apply_hardening` (dry-run default), `ir_contain`. Classes: deploy/apply/ir = **ACTIVE** (aprovação
+    + audit + rollback); verify = **PASSIVE**. Schemas em `NATIVE_TOOLS`, escopadas em analysis/report.
+  - **DB:** nova tabela `blue_deployments` (id, kind, target_system, rule_type, status, mock,
+    reversible, payload, external_id, rolled_back_at, …).
+  - **API:** `GET /api/blue/deployments`, `GET /{id}`, `POST /{id}/verify`, `DELETE /{id}` (rollback).
+  - **Deploy real suportado:** SIEM via Elastic Detection Engine; WAF/EDR via endpoint admin opt-in.
+    Splunk HEC/Datadog ingerem eventos (não regras) ⇒ reportam honesto "não suportado". Sem credencial
+    ⇒ mock honesto.
+  - **Integração mantida:** `apply_hardening` consome a saída REAL de `generate_hardening_baseline`
+    (`target_config_file`/`hardening_snippet`/`benchmark_reference`) — mapeamento adicionado após o
+    1º live run falhar por shape; regressão travada em teste.
+  - **Testes:** +20 em `tests/test_blue/` (deployers/registry, hardening dry-run/apply/rollback, IR,
+    handlers do agente + classes de ação, API deploy→list→verify→rollback). Suíte: **427 → 447 verdes**.
+  - **VALIDAÇÃO AO VIVO** (tools reais + rotas reais + DB on-disk): `generate_detection_rules`(Sigma) →
+    `deploy_detection_rule`(SIEM, mock) → **ativa** (`verify`) → listada → **rollback** → inativa;
+    `apply_hardening` **dry-run por padrão** (nada alterado); `ir_contain` reversível. Fluxo F2 ponta-a-ponta OK.
+  - **Follow-ups F2 (anotados no ROADMAP §10):** apply real de hardening (SSH/Ansible/PR IaC);
+    adaptadores reais p/ Splunk saved-search / Sentinel; `verify` real p/ WAF/EDR.
+  - **Próximo:** F3 (Purple loop fechado: BAS medido → detectar → tunar → re-medir).
+- **2026-10-04 — Red Team F3 (Purple Team: loop fechado medido) implementada e validada ao vivo (✅):**
+  - **Pacote `arcanum/purple/`:** `store.PurpleResultStore` (tabela `purple_results` = resultados
+    MEDIDOS por técnica/campanha; cobertura = último resultado por técnica); `bas.BASRunner` (executa
+    a técnica via sandbox autorizado OU **simula honestamente** sem sandbox — `execution_status=
+    'simulated'`, nunca finge execução real — com **deconfliction tag** `ARCANUM-BAS:<camp>:<tid>`);
+    `verify.DetectionVerifier.was_detected` (mede detecção a partir das **regras ativas implantadas da
+    F2** no `blue_deployments` + consulta SIEM real opcional; nunca fabrica veredito; sem cobertura ⇒
+    MISS honesto, não "desconhecido"); `efficacy` (`measured_efficacy_report` + `apply_measured_results`
+    que empurra os veredictos medidos para o `MitreEfficacyEngine`, sobrescrevendo o seed estático);
+    `loop.PurpleLoop.close_gap` (run→verifica→se MISS: gera+implanta regra Sigma coberta via F2→re-mede);
+    `campaign.PurpleCampaign` (encadeia técnicas, mede cobertura ponta-a-ponta, relatório de lacunas).
+  - **Tools do agente (governadas pela F0):** `run_bas_test`/`run_purple_campaign` = **EXPLOIT**
+    (emulação de adversário → ROE + dupla aprovação), `verify_detection`/`measure_coverage` = **PASSIVE**.
+    Schemas em `NATIVE_TOOLS`; EXPLOIT_TOOLS ganha run_bas_test/run_purple_campaign/verify_detection/
+    measure_coverage; ANALYSIS/REPORT ganham verify_detection/measure_coverage.
+  - **DB:** nova tabela `purple_results`.
+  - **API read-only:** `GET /api/purple/results`, `GET /api/purple/coverage/{id}` (com eficácia
+    medida). **Execução só pelos tools governados** — nenhum endpoint HTTP dispara emulação (seria
+    EXPLOIT não-gated). Decisão de segurança registrada.
+  - **Como a detecção é medida sem SIEM externo:** sinal REAL do próprio sistema — existe uma regra de
+    detecção **ativa implantada** (registry da F2) cobrindo a técnica? Deploy fecha a lacuna ⇒ re-medida
+    vira HIT. Nada fabricado. Com Elastic configurado, consulta também alerta real pela tag.
+  - **Testes:** +13 em `tests/test_purple/` (BAS simulado honesto + tag; verifier MISS→HIT após deploy;
+    loop detectar→tunar→validar; cobertura medida ≠ seed; `apply_measured_results` no MitreEngine;
+    campanha com/sem auto-tune; tools do agente + classes de ação; API read-only). Suíte: **447 → 460**.
+  - **VALIDAÇÃO AO VIVO** (tools reais + API real + DB on-disk): `run_bas_test T1190` → MISS → tune
+    (deploy) → HIT; `run_purple_campaign` multi-técnica → **cobertura 100%** após tuning; campanha sem
+    auto-tune → lacunas medidas (0%); `/api/purple/coverage` com `measured_efficacy.source=measured`;
+    `verify_detection` reflete a regra implantada. Loop fechado ponta-a-ponta confirmado.
+  - **Follow-ups F3 (ROADMAP §10):** execução real de Atomic Red Team no sandbox; correlação por alerta
+    real multi-SIEM; agendamento via CTEM daemon; separar métrica de PREVENÇÃO vs DETECÇÃO.
+  - **Ofensivo F1/F4/F5 permanece gated** (exige alvo autorizado + ROE); não implementado.
+- **2026-10-05 — F3 revisão de segunda-opinião: gap de honestidade corrigido (✅):**
+  - **Bug:** `DetectionVerifier.was_detected` contava uma regra `status='active'` como `detected=True`
+    **sem checar `mock`**. Um deploy sem credenciais é **mock** (nada chegou a um controle real), então
+    "cobertura simulada" inflava o `detection_rate` e o heatmap MITRE — violando "measured from real
+    signals, never fabricated" e o invariante AGENTS §5 (nunca simulado como real).
+  - **Fix:** (1) `verify.py` — ao casar uma deployment, lê `mock`: mock ⇒
+    `{detected:True, source:'deployed_rule_simulated', simulated:True}`; real ⇒
+    `source:'deployed_rule', simulated:False`; **real vence mock**; SIEM real ⇒ `source:'siem'`.
+    (2) `store.py` — nova coluna/campo `detection_simulated`; `coverage()` separa `detected_real` de
+    `detected_simulated` e expõe `coverage_percent_real` + `simulated_gaps`. (3) `efficacy.py` —
+    `measured_efficacy_report` expõe `detection_rate_real` vs `coverage_simulated`;
+    `apply_measured_results` marca DETECTED **só** p/ detecção REAL — simulada vira **MISSED** com log
+    claro (não pinta como detecção real no MITRE). (4) `loop.py` — status `tuned_simulated` quando a
+    cobertura é só mock; `campaign.py` — relatório distingue lacunas reais de cobertura simulada.
+  - **Testes:** +3 regressões em `tests/test_purple/` (mock ⇒ `simulated=True` e não conta como real;
+    real deploy ⇒ não-simulado; preferência real>mock; SIEM real ⇒ `source='siem'` via mock da query).
+    Suíte: **460 → 463 verdes.**
+  - **VALIDAÇÃO AO VIVO:** T1190 mock-tuned ⇒ `status=tuned_simulated`, `after.simulated=True`;
+    campanha ⇒ `coverage_percent=100%` mas `coverage_percent_real=0%` + `simulated_coverage_gaps`;
+    API `detection_rate_real=0%`, `coverage_simulated=100%`; `verify_detection` ⇒
+    `source='deployed_rule_simulated'`. Simulado nunca mais aparece como detecção real.

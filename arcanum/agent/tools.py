@@ -1828,21 +1828,152 @@ NATIVE_TOOLS: list[dict] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "deploy_detection_rule",
+            "description": "BLUE TEAM: Deploy a detection rule (Sigma/ModSecurity/Suricata/Elastic/IOC) to a defensive control (SIEM, WAF or EDR) and record it in the rollback registry. Honest mock when no credentials are configured (never fakes a real deploy). Pair with verify_detection_active. Takes the rule body produced by generate_detection_rules.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "rule": {"type": "string", "description": "The detection rule body/text to deploy (e.g. the Sigma YAML, ModSecurity rule, or Suricata signature)."},
+                    "rule_type": {"type": "string", "description": "Rule format: sigma | modsecurity | suricata | elastic | ioc (default 'sigma')."},
+                    "target_system": {"type": "string", "description": "Where to deploy: 'siem', 'waf' or 'edr' (default 'siem')."},
+                    "name": {"type": "string", "description": "Human-readable rule name."},
+                },
+                "required": ["rule"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "verify_detection_active",
+            "description": "BLUE TEAM: Verify that a previously deployed detection rule is currently active (queries the external control when real, else the rollback registry). Returns {active: bool, status}.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "deployment_id": {"type": "string", "description": "The deployment id returned by deploy_detection_rule."},
+                },
+                "required": ["deployment_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "apply_hardening",
+            "description": "BLUE TEAM: Apply a hardening baseline (from generate_hardening_baseline) using a safe dry-run → diff → apply → verify flow. DRY-RUN BY DEFAULT (dry_run=true returns the diff without changing anything). Set dry_run=false only after operator approval to actually apply. Reversible via the rollback registry.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "baseline": {"type": "object", "description": "A generate_hardening_baseline result (must include config_file + snippet)."},
+                    "config_file": {"type": "string", "description": "Target config file (if baseline not passed)."},
+                    "snippet": {"type": "string", "description": "Hardening config snippet to apply (if baseline not passed)."},
+                    "target": {"type": "string", "description": "Target host/identifier."},
+                    "dry_run": {"type": "boolean", "description": "If true (default), only compute the diff; nothing is changed."},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "ir_contain",
+            "description": "BLUE TEAM: Incident-response containment — isolate_host | disable_account | block_ip. Reversible (pass revert=true + deployment_id to undo). Honest mock when no EDR/firewall API is configured.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "description": "isolate_host | disable_account | block_ip."},
+                    "target": {"type": "string", "description": "The host, account or IP to contain."},
+                    "revert": {"type": "boolean", "description": "If true, revert a prior containment (requires deployment_id)."},
+                    "deployment_id": {"type": "string", "description": "The containment id to revert (with revert=true)."},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_bas_test",
+            "description": "PURPLE TEAM: Run (or honestly simulate) an ATT&CK technique as a Breach-and-Attack-Simulation test with a deconfliction tag, then MEASURE whether it was detected. On a miss, auto-tune: generate + deploy a detection rule and re-measure. Requires an authorized engagement (classified EXPLOIT: adversary emulation). Nothing real executes without an authorized sandbox.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "technique_id": {"type": "string", "description": "ATT&CK technique id, e.g. 'T1190' or 'T1059.001'."},
+                    "tactic": {"type": "string", "description": "ATT&CK tactic name (optional)."},
+                    "command": {"type": "string", "description": "Atomic test command to run in the sandbox (optional; without it or without a sandbox, the run is simulated honestly)."},
+                    "campaign_id": {"type": "string", "description": "Group results under this campaign id (optional)."},
+                    "auto_tune": {"type": "boolean", "description": "If true (default), deploy a detection rule and re-measure when the technique is missed."},
+                },
+                "required": ["technique_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "verify_detection",
+            "description": "PURPLE TEAM: Measure whether an ATT&CK technique is detected — from active deployed detection rules and/or a real SIEM alert carrying the deconfliction tag. Read-only.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "technique_id": {"type": "string", "description": "ATT&CK technique id to check."},
+                    "tag": {"type": "string", "description": "Deconfliction tag to match in the SIEM (optional)."},
+                },
+                "required": ["technique_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "measure_coverage",
+            "description": "PURPLE TEAM: Report MEASURED detection coverage for a campaign (percentage of executed techniques detected) plus the remaining gaps. Efficacy is measured, not seeded. Read-only.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "campaign_id": {"type": "string", "description": "The campaign id to measure."},
+                },
+                "required": ["campaign_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_purple_campaign",
+            "description": "PURPLE TEAM: Run a chain of ATT&CK techniques (an emulation plan), measure end-to-end detection coverage and produce a gap report, auto-tuning (deploying detection rules) on misses. Requires an authorized engagement (classified EXPLOIT).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "techniques": {"type": "array", "description": "List of ATT&CK technique ids (e.g. ['T1190','T1059.001']) or objects {technique_id, tactic, command}."},
+                    "auto_tune": {"type": "boolean", "description": "If true (default), close gaps by deploying detection rules and re-measuring."},
+                    "campaign_id": {"type": "string", "description": "Campaign id (optional)."},
+                },
+                "required": ["techniques"],
+            },
+        },
+    },
 ]
 
 RECON_TOOLS = {"execute", "audit_security_headers", "audit_dns_email_security", "scan_exposed_secrets", "audit_tls_ssl", "query_whois_rdap", "enrich_ip_intel", "search_historical_urls", "search_cert_transparency", "audit_well_known_security", "audit_cloud_storage", "audit_subdomain_takeover", "detect_waf_firewall", "audit_http_methods", "audit_rate_limiting", "audit_websocket_security", "audit_supply_chain_libs", "audit_graphql_security", "audit_oauth_sso", "audit_dnsbl_reputation", "audit_dkim_bimi", "query_threat_feeds", "audit_ssrf_cloud_metadata", "audit_prototype_pollution", "audit_waf_bypass_heuristics", "audit_saml_xml_security", "audit_web_cache_poisoning", "audit_mta_sts_dane", "audit_http_request_smuggling", "audit_ssti_injection", "audit_nosql_injection", "generate_subdomain_permutations", "audit_open_redirect_bypasses", "audit_dom_clobbering", "audit_grpc_api_security", "audit_s3_bucket_permissions_deep", "audit_git_and_env_leakage", "audit_content_security_policy_deep", "audit_dns_zone_transfer_and_nsec", "audit_smtp_open_relay_and_spoofing", "audit_ip_spoofing_access_controls", "audit_http3_quic_exposure", "audit_snmp_community_exposure", "audit_smb_signing_and_null_sessions", "audit_postmessage_messaging_security", "audit_http_parameter_pollution", "audit_clickjacking_and_ui_redressing", "audit_vector_database_exposure", "audit_subresource_integrity_sri", "audit_mtls_and_mesh_security", "dispatch_to_satellite_probe", "analyze_active_directory", "headless_web_audit", "evaluate_defensive_efficacy", "map_mitre_attack", "read_memory", "update_memory", "query_playbook", "save_playbook", "read_file", "web_search", "query_graph"}
-ANALYSIS_TOOLS = {"execute", "audit_security_headers", "audit_dns_email_security", "scan_exposed_secrets", "audit_tls_ssl", "audit_api_spec", "search_historical_urls", "search_cert_transparency", "enrich_cve_threat", "audit_well_known_security", "audit_cloud_storage", "audit_subdomain_takeover", "detect_waf_firewall", "audit_cors_advanced", "audit_http_methods", "map_mitre_attack", "generate_detection_rules", "audit_jwt_security", "audit_rate_limiting", "audit_websocket_security", "audit_supply_chain_libs", "audit_compliance_matrix", "generate_atomic_test", "simulate_attack_path", "audit_graphql_security", "audit_oauth_sso", "generate_ir_playbook", "audit_dnsbl_reputation", "generate_canary_tokens", "audit_ssrf_cloud_metadata", "calculate_cvss_vector", "audit_api_idor_matrix", "audit_prototype_pollution", "generate_hardening_baseline", "audit_dkim_bimi", "query_threat_feeds", "audit_waf_bypass_heuristics", "audit_sbom_dependencies", "audit_saml_xml_security", "generate_yara_rule", "audit_dockerfile_security", "audit_kubernetes_rbac", "calculate_breach_risk_cost", "audit_iac_misconfigurations", "audit_cicd_pipeline_security", "audit_web_cache_poisoning", "audit_api_mass_assignment", "audit_mta_sts_dane", "audit_identity_access_hygiene", "analyze_forensic_artifacts", "audit_binary_protections", "audit_http_request_smuggling", "audit_ssti_injection", "audit_nosql_injection", "generate_subdomain_permutations", "audit_ntlm_relay_coercion", "simulate_cloud_iam_privesc", "audit_race_conditions_concurrency", "audit_dom_clobbering", "audit_xxe_injection", "audit_open_redirect_bypasses", "audit_ldap_injection", "audit_grpc_api_security", "audit_insecure_deserialization", "audit_crlf_header_injection", "audit_reverse_proxy_path_traversal", "audit_s3_bucket_permissions_deep", "audit_git_and_env_leakage", "audit_content_security_policy_deep", "audit_api_excessive_data_exposure", "audit_dns_zone_transfer_and_nsec", "audit_smtp_open_relay_and_spoofing", "audit_server_side_prototype_pollution", "audit_ip_spoofing_access_controls", "audit_kerberos_delegation_risks", "audit_http3_quic_exposure", "audit_snmp_community_exposure", "audit_adcs_certificate_templates", "audit_smb_signing_and_null_sessions", "audit_postmessage_messaging_security", "audit_http_parameter_pollution", "audit_container_breakout_vectors", "audit_clickjacking_and_ui_redressing", "audit_bfla_api_authorization", "audit_kerberoasting_surface", "audit_linux_privesc_vectors", "audit_llm_prompt_injection_and_jailbreaks", "audit_vector_database_exposure", "audit_subresource_integrity_sri", "audit_dependency_confusion_and_namespaces", "audit_webhook_ssrf_and_dns_rebinding", "audit_ad_dacl_abuse_paths", "audit_windows_token_privileges", "audit_cicd_workflow_poisoning", "audit_mtls_and_mesh_security", "audit_ebpf_integrity_and_rootkits", "search_cve", "create_finding", "dispatch_enterprise_integration", "check_cisa_kev", "dispatch_to_satellite_probe", "analyze_active_directory", "headless_web_audit", "evaluate_defensive_efficacy", "read_memory", "update_memory", "query_playbook", "read_file", "web_search", "query_graph"}
+ANALYSIS_TOOLS = {"execute", "audit_security_headers", "audit_dns_email_security", "scan_exposed_secrets", "audit_tls_ssl", "audit_api_spec", "search_historical_urls", "search_cert_transparency", "enrich_cve_threat", "audit_well_known_security", "audit_cloud_storage", "audit_subdomain_takeover", "detect_waf_firewall", "audit_cors_advanced", "audit_http_methods", "map_mitre_attack", "generate_detection_rules", "audit_jwt_security", "audit_rate_limiting", "audit_websocket_security", "audit_supply_chain_libs", "audit_compliance_matrix", "generate_atomic_test", "simulate_attack_path", "audit_graphql_security", "audit_oauth_sso", "generate_ir_playbook", "audit_dnsbl_reputation", "generate_canary_tokens", "audit_ssrf_cloud_metadata", "calculate_cvss_vector", "audit_api_idor_matrix", "audit_prototype_pollution", "generate_hardening_baseline", "audit_dkim_bimi", "query_threat_feeds", "audit_waf_bypass_heuristics", "audit_sbom_dependencies", "audit_saml_xml_security", "generate_yara_rule", "audit_dockerfile_security", "audit_kubernetes_rbac", "calculate_breach_risk_cost", "audit_iac_misconfigurations", "audit_cicd_pipeline_security", "audit_web_cache_poisoning", "audit_api_mass_assignment", "audit_mta_sts_dane", "audit_identity_access_hygiene", "analyze_forensic_artifacts", "audit_binary_protections", "audit_http_request_smuggling", "audit_ssti_injection", "audit_nosql_injection", "generate_subdomain_permutations", "audit_ntlm_relay_coercion", "simulate_cloud_iam_privesc", "audit_race_conditions_concurrency", "audit_dom_clobbering", "audit_xxe_injection", "audit_open_redirect_bypasses", "audit_ldap_injection", "audit_grpc_api_security", "audit_insecure_deserialization", "audit_crlf_header_injection", "audit_reverse_proxy_path_traversal", "audit_s3_bucket_permissions_deep", "audit_git_and_env_leakage", "audit_content_security_policy_deep", "audit_api_excessive_data_exposure", "audit_dns_zone_transfer_and_nsec", "audit_smtp_open_relay_and_spoofing", "audit_server_side_prototype_pollution", "audit_ip_spoofing_access_controls", "audit_kerberos_delegation_risks", "audit_http3_quic_exposure", "audit_snmp_community_exposure", "audit_adcs_certificate_templates", "audit_smb_signing_and_null_sessions", "audit_postmessage_messaging_security", "audit_http_parameter_pollution", "audit_container_breakout_vectors", "audit_clickjacking_and_ui_redressing", "audit_bfla_api_authorization", "audit_kerberoasting_surface", "audit_linux_privesc_vectors", "audit_llm_prompt_injection_and_jailbreaks", "audit_vector_database_exposure", "audit_subresource_integrity_sri", "audit_dependency_confusion_and_namespaces", "audit_webhook_ssrf_and_dns_rebinding", "audit_ad_dacl_abuse_paths", "audit_windows_token_privileges", "audit_cicd_workflow_poisoning", "audit_mtls_and_mesh_security", "audit_ebpf_integrity_and_rootkits", "search_cve", "create_finding", "dispatch_enterprise_integration", "check_cisa_kev", "dispatch_to_satellite_probe", "analyze_active_directory", "headless_web_audit", "evaluate_defensive_efficacy", "deploy_detection_rule", "verify_detection_active", "apply_hardening", "ir_contain", "verify_detection", "measure_coverage", "read_memory", "update_memory", "query_playbook", "read_file", "web_search", "query_graph"}
 
 
 REPORT_TOOLS = {
     "create_finding", "calculate_breach_risk_cost", "calculate_cvss_vector",
     "generate_hardening_baseline", "generate_ir_playbook", "dispatch_enterprise_integration",
+    "deploy_detection_rule", "verify_detection_active", "apply_hardening", "measure_coverage",
     "stash_artifact", "read_memory", "query_graph", "save_playbook"
 }
 
 EXPLOIT_TOOLS = {
     "execute", "search_cve", "create_finding", "stash_artifact", "simulate_attack_path",
-    "calculate_cvss_vector", "read_memory", "update_memory", "query_graph"
+    "calculate_cvss_vector", "read_memory", "update_memory", "query_graph",
+    "run_bas_test", "run_purple_campaign", "verify_detection", "measure_coverage",
 }
 
 
@@ -2150,6 +2281,14 @@ class ToolExecutor:
             "audit_http_methods": self._handle_audit_http_methods,
             "map_mitre_attack": self._handle_map_mitre_attack,
             "generate_detection_rules": self._handle_generate_detection_rules,
+            "deploy_detection_rule": self._handle_deploy_detection_rule,
+            "verify_detection_active": self._handle_verify_detection_active,
+            "apply_hardening": self._handle_apply_hardening,
+            "ir_contain": self._handle_ir_contain,
+            "run_bas_test": self._handle_run_bas_test,
+            "verify_detection": self._handle_verify_detection,
+            "measure_coverage": self._handle_measure_coverage,
+            "run_purple_campaign": self._handle_run_purple_campaign,
             "audit_jwt_security": self._handle_audit_jwt_security,
             "audit_rate_limiting": self._handle_audit_rate_limiting,
             "audit_websocket_security": self._handle_audit_websocket_security,
@@ -4871,6 +5010,186 @@ class ToolExecutor:
             "suricata_rule": chosen["suricata_rule"],
             "deployment_instructions": "Importe a regra Sigma no seu SIEM (Splunk, Elastic, Sentinel) via pySigma. Aplique a regra ModSecurity no seu WAF de borda ou proxy reverso (Coraza / Nginx-ModSec).",
         }
+
+    # -- Blue Team (F2): real defensive deploy / verify / harden / contain ----
+
+    def _blue_registry(self):
+        from ..blue.registry import DeploymentRegistry
+        return DeploymentRegistry(self.db)
+
+    def _blue_deployer(self, target_system: str):
+        from ..core.config import get_config
+        from ..blue.deployers.siem import SIEMDeployer
+        from ..blue.deployers.waf import WAFDeployer
+        from ..blue.deployers.edr import EDRDeployer
+        cls = {"siem": SIEMDeployer, "waf": WAFDeployer, "edr": EDRDeployer}.get((target_system or "").lower())
+        if not cls:
+            return None
+        return cls(config=get_config(), registry=self._blue_registry(), session_id=self.session_id)
+
+    async def _handle_deploy_detection_rule(
+        self, rule: str = "", rule_type: str = "sigma", target_system: str = "siem",
+        name: str = "", query: str = "", **kwargs,
+    ) -> dict:
+        """Deploy a detection rule to a defensive control (SIEM/WAF/EDR) and record
+        it in the rollback registry. Honest mock when no credentials are set."""
+        if self.db is None:
+            return {"error": "Banco indisponível — deploy de regra requer persistência (registry de rollback)."}
+        deployer = self._blue_deployer(target_system)
+        if deployer is None:
+            return {"error": f"target_system inválido '{target_system}'. Use 'siem', 'waf' ou 'edr'."}
+        body = rule or kwargs.get("body") or ""
+        if not body and not query:
+            return {"error": "Nenhuma regra fornecida (parâmetro 'rule' vazio)."}
+        rt = (rule_type or "sigma").lower()
+        rule_obj = {"rule_type": rt, "name": name or f"{target_system}-{rt}", "body": body}
+        if rt in ("modsecurity", "modsec", "waf"):
+            rule_obj["modsecurity"] = body
+        elif rt == "sigma":
+            rule_obj["sigma"] = body
+        elif rt in ("elastic", "kql", "kuery"):
+            rule_obj["query"] = query or body
+        elif rt in ("ioc", "edr"):
+            rule_obj["indicator"] = body
+        rule_obj.update({k: v for k, v in kwargs.items() if k in ("severity", "risk_score", "description", "phase", "action")})
+        result = await deployer.deploy(rule_obj)
+        result["deployment_instructions"] = (
+            "Use verify_detection_active(deployment_id) para confirmar que está ativa; "
+            "faça rollback via DELETE /api/blue/deployments/{id} se necessário."
+        )
+        return result
+
+    async def _handle_verify_detection_active(self, deployment_id: str = "", **kwargs) -> dict:
+        """Verify whether a previously deployed detection rule is currently active."""
+        if self.db is None:
+            return {"error": "Banco indisponível."}
+        if not deployment_id:
+            return {"error": "Parâmetro 'deployment_id' obrigatório."}
+        rec = await self._blue_registry().get(deployment_id)
+        if not rec:
+            return {"active": False, "status": "not_found", "deployment_id": deployment_id}
+        deployer = self._blue_deployer(rec.get("target_system") or "siem") or self._blue_deployer("siem")
+        return await deployer.verify(deployment_id)
+
+    async def _handle_apply_hardening(
+        self, baseline: dict = None, config_file: str = "", snippet: str = "",
+        target: str = "", dry_run: bool = True, **kwargs,
+    ) -> dict:
+        """Apply a hardening baseline (dry-run by default). Set dry_run=false to
+        actually apply (requires operator approval via the governed engine)."""
+        if self.db is None:
+            return {"error": "Banco indisponível — apply de hardening requer persistência (rollback)."}
+        from ..blue.hardening import HardeningApplier
+        from ..core.config import get_config
+        base = dict(baseline) if isinstance(baseline, dict) else {}
+        # Accept the generate_hardening_baseline output shape
+        # (target_config_file / hardening_snippet / benchmark_reference).
+        if not base.get("config_file") and base.get("target_config_file"):
+            base["config_file"] = base["target_config_file"]
+        if not base.get("snippet") and base.get("hardening_snippet"):
+            base["snippet"] = base["hardening_snippet"]
+        if not base.get("benchmark") and base.get("benchmark_reference"):
+            base["benchmark"] = base["benchmark_reference"]
+        if config_file:
+            base.setdefault("config_file", config_file)
+        if snippet:
+            base.setdefault("snippet", snippet)
+        if not base.get("snippet"):
+            return {"error": "Nenhum baseline de hardening fornecido ('baseline' ou 'snippet')."}
+        applier = HardeningApplier(config=get_config(), registry=self._blue_registry(), session_id=self.session_id)
+        # normalize dry_run that may arrive as a string from a weak LLM
+        if isinstance(dry_run, str):
+            dry_run = dry_run.strip().lower() not in ("false", "0", "no", "nao", "não")
+        return await applier.apply(base, target=target, dry_run=bool(dry_run))
+
+    async def _handle_ir_contain(
+        self, action: str = "", target: str = "", revert: bool = False,
+        deployment_id: str = "", **kwargs,
+    ) -> dict:
+        """Incident-response containment (isolate_host | disable_account | block_ip),
+        reversible. Honest mock when no EDR/firewall API is configured."""
+        if self.db is None:
+            return {"error": "Banco indisponível — ação de IR requer persistência (rollback)."}
+        from ..blue.response import IncidentResponder
+        from ..core.config import get_config
+        responder = IncidentResponder(config=get_config(), registry=self._blue_registry(), session_id=self.session_id)
+        if isinstance(revert, str):
+            revert = revert.strip().lower() in ("true", "1", "yes", "sim")
+        if revert:
+            if not deployment_id:
+                return {"error": "Para reverter, informe 'deployment_id'."}
+            return await responder.revert(deployment_id)
+        if not action or not target:
+            return {"error": "Parâmetros 'action' e 'target' obrigatórios (ou revert=true + deployment_id)."}
+        return await responder.contain(action, target)
+
+    # -- Purple Team (F3): measured closed-loop BAS ---------------------------
+
+    def _bool(self, v, default=True):
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, str):
+            return v.strip().lower() not in ("false", "0", "no", "nao", "não", "off")
+        return default
+
+    async def _handle_run_bas_test(
+        self, technique_id: str = "", tactic: str = "", command: str = "",
+        campaign_id: str = "", auto_tune: bool = True, **kwargs,
+    ) -> dict:
+        """PURPLE: run (or honestly simulate) an ATT&CK technique and MEASURE whether
+        it is detected; on a miss, auto-tune (deploy a detection rule) and re-measure."""
+        if self.db is None:
+            return {"error": "Banco indisponível — BAS requer persistência (resultados medidos)."}
+        if not technique_id:
+            return {"error": "Parâmetro 'technique_id' obrigatório (ex.: 'T1190')."}
+        from ..purple.loop import PurpleLoop
+        from ..core.config import get_config
+        loop = PurpleLoop(self.db, config=get_config(), sandbox=self.sandbox, session_id=self.session_id)
+        return await loop.close_gap(technique_id, campaign_id=campaign_id or None,
+                                    tactic=tactic or None, command=command or None,
+                                    auto_tune=self._bool(auto_tune))
+
+    async def _handle_verify_detection(
+        self, technique_id: str = "", tag: str = "", window: int = None, **kwargs,
+    ) -> dict:
+        """PURPLE: measure whether a technique is detected (active deployed rule
+        and/or real SIEM alert). Read-only."""
+        if self.db is None:
+            return {"error": "Banco indisponível."}
+        if not technique_id:
+            return {"error": "Parâmetro 'technique_id' obrigatório."}
+        from ..purple.verify import DetectionVerifier
+        from ..core.config import get_config
+        return await DetectionVerifier(self.db, config=get_config()).was_detected(
+            technique_id, tag=tag or None, window=window)
+
+    async def _handle_measure_coverage(self, campaign_id: str = "", **kwargs) -> dict:
+        """PURPLE: report MEASURED detection coverage for a campaign (not seed)."""
+        if self.db is None:
+            return {"error": "Banco indisponível."}
+        if not campaign_id:
+            return {"error": "Parâmetro 'campaign_id' obrigatório."}
+        from ..purple.store import PurpleResultStore
+        from ..purple.efficacy import measured_efficacy_report
+        cov = await PurpleResultStore(self.db).coverage(campaign_id)
+        cov["measured_efficacy"] = measured_efficacy_report(cov.get("techniques", []))
+        return cov
+
+    async def _handle_run_purple_campaign(
+        self, techniques=None, auto_tune: bool = True, campaign_id: str = "", **kwargs,
+    ) -> dict:
+        """PURPLE: run a chain of ATT&CK techniques, measure end-to-end coverage and
+        report gaps (auto-tuning on misses when auto_tune=true)."""
+        if self.db is None:
+            return {"error": "Banco indisponível — campanha requer persistência."}
+        if isinstance(techniques, str):
+            techniques = [t.strip() for t in techniques.replace(";", ",").split(",") if t.strip()]
+        if not techniques:
+            return {"error": "Parâmetro 'techniques' obrigatório (lista de técnicas ATT&CK, ex.: ['T1190','T1059.001'])."}
+        from ..purple.campaign import PurpleCampaign
+        from ..core.config import get_config
+        camp = PurpleCampaign(self.db, config=get_config(), sandbox=self.sandbox, session_id=self.session_id)
+        return await camp.run(techniques, auto_tune=self._bool(auto_tune), campaign_id=campaign_id or None)
 
     # -- Blue/Red Team: JWT Security Audit -----------------------------------
 

@@ -193,6 +193,101 @@ CREATE TABLE IF NOT EXISTS ad_edges (
 CREATE INDEX IF NOT EXISTS idx_ad_objects_domain ON ad_objects(domain_id, object_type);
 CREATE INDEX IF NOT EXISTS idx_ad_edges_source ON ad_edges(domain_id, source_sid);
 CREATE INDEX IF NOT EXISTS idx_ad_edges_target ON ad_edges(domain_id, target_sid);
+
+-- Red Team governance (F0): engagements (ROE), immutable action log, foothold registry.
+CREATE TABLE IF NOT EXISTS engagements (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    session_id TEXT,              -- optional: scope the engagement to one session
+    scope TEXT,                   -- JSON list of authorized hosts/CIDRs
+    allowed_classes TEXT,         -- JSON list of ActionClass values
+    window_start DATETIME,
+    window_end DATETIME,
+    roe_hash TEXT NOT NULL,       -- tamper-evidence hash of the contract
+    status TEXT DEFAULT 'active', -- active | closed
+    operator TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    closed_at DATETIME
+);
+
+CREATE TABLE IF NOT EXISTS actions_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    engagement_id TEXT,
+    session_id TEXT,
+    tool TEXT,
+    action_class TEXT,
+    target TEXT,
+    decision TEXT,                -- executed | blocked_by_roe | kill_switch | ...
+    risk TEXT,
+    arguments TEXT,               -- JSON (masked)
+    result_summary TEXT,
+    operator TEXT,
+    deconfliction_tag TEXT,
+    prev_hash TEXT,               -- chain linkage
+    entry_hash TEXT NOT NULL,     -- sha256(prev_hash + payload)
+    payload TEXT,                 -- exact JSON that was hashed (for verification)
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_actions_log_engagement ON actions_log(engagement_id);
+
+CREATE TABLE IF NOT EXISTS redteam_sessions (
+    id TEXT PRIMARY KEY,
+    engagement_id TEXT,
+    session_id TEXT,
+    host TEXT,
+    access_level TEXT DEFAULT 'user',  -- none | user | admin | system
+    implant_type TEXT DEFAULT 'shell',
+    parent_id TEXT,              -- pivot parent foothold
+    status TEXT DEFAULT 'open',  -- open | cleaned | closed
+    metadata TEXT,               -- JSON
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    closed_at DATETIME
+);
+CREATE INDEX IF NOT EXISTS idx_redteam_sessions_engagement ON redteam_sessions(engagement_id, status);
+
+-- Blue Team (F2): rollback registry for real defensive actions (detection-rule
+-- deploys, hardening applies, IR containment). Every change is recorded so it
+-- can be verified and reversed.
+CREATE TABLE IF NOT EXISTS blue_deployments (
+    id TEXT PRIMARY KEY,
+    kind TEXT,                   -- detection_rule | hardening | ir_action
+    target_system TEXT,          -- siem | waf | edr | firewall | host | account
+    rule_type TEXT,              -- sigma | modsecurity | suricata | elastic | host-hardening | ...
+    name TEXT,
+    status TEXT DEFAULT 'active',-- active | rolled_back | failed | dry_run | planned
+    mock INTEGER DEFAULT 0,      -- 1 = honest mock (no real external deploy)
+    reversible INTEGER DEFAULT 1,
+    payload TEXT,                -- JSON (rule/diff/action detail)
+    external_id TEXT,            -- id returned by a real external system
+    session_id TEXT,
+    engagement_id TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    verified_at DATETIME,
+    rolled_back_at DATETIME
+);
+CREATE INDEX IF NOT EXISTS idx_blue_deployments_kind ON blue_deployments(kind, status);
+
+-- Purple Team (F3): MEASURED BAS results (closed loop). Each run of a technique
+-- plus its detection verdict is stored so efficacy is computed from measurement,
+-- not a static seed, and so the detect→tune→re-measure loop is auditable.
+CREATE TABLE IF NOT EXISTS purple_results (
+    id TEXT PRIMARY KEY,
+    campaign_id TEXT,
+    technique_id TEXT,
+    tactic TEXT,
+    deconfliction_tag TEXT,
+    executed INTEGER DEFAULT 0,
+    execution_status TEXT,       -- executed | simulated | blocked
+    detected INTEGER,            -- NULL = unknown, 0 = miss, 1 = hit
+    detection_source TEXT,       -- deployed_rule | deployed_rule_simulated | siem | none
+    detection_simulated INTEGER DEFAULT 0, -- 1 = detection only via a MOCK deploy (no real control)
+    tuned INTEGER DEFAULT 0,     -- a detection rule was deployed to close the gap
+    deployment_id TEXT,          -- the rule deployed to close the gap (if any)
+    session_id TEXT,
+    engagement_id TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_purple_results_campaign ON purple_results(campaign_id);
 """
 
 
@@ -256,6 +351,36 @@ class Database:
                 await self._conn.execute("ALTER TABLE findings ADD COLUMN retested_at DATETIME")
             if "retest_proof" not in cols:
                 await self._conn.execute("ALTER TABLE findings ADD COLUMN retest_proof TEXT")
+            await self._conn.commit()
+        except Exception:
+            pass
+
+        # Compromise-state columns on graph nodes (F0): track owned access level,
+        # held credentials and the foothold that owns the node. Idempotent — only
+        # adds columns that are missing (fresh DBs created without them above).
+        try:
+            cursor = await self._conn.execute("PRAGMA table_info(graph_nodes)")
+            gcols = {row["name"] for row in await cursor.fetchall()}
+            if "owned" not in gcols:
+                await self._conn.execute(
+                    "ALTER TABLE graph_nodes ADD COLUMN owned TEXT DEFAULT 'none'")  # none/user/admin/system
+            if "creds_held" not in gcols:
+                await self._conn.execute("ALTER TABLE graph_nodes ADD COLUMN creds_held TEXT")  # JSON (masked)
+            if "foothold_id" not in gcols:
+                await self._conn.execute("ALTER TABLE graph_nodes ADD COLUMN foothold_id TEXT")
+            await self._conn.commit()
+        except Exception:
+            pass
+
+        # Purple honesty column (F3 review): detection via a MOCK deploy is
+        # SIMULATED coverage, not a real control — tracked separately so it never
+        # inflates the real detection rate. Idempotent for already-created DBs.
+        try:
+            cursor = await self._conn.execute("PRAGMA table_info(purple_results)")
+            pcols = {row["name"] for row in await cursor.fetchall()}
+            if pcols and "detection_simulated" not in pcols:
+                await self._conn.execute(
+                    "ALTER TABLE purple_results ADD COLUMN detection_simulated INTEGER DEFAULT 0")
             await self._conn.commit()
         except Exception:
             pass

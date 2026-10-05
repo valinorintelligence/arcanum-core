@@ -19,7 +19,7 @@ from ..core.demo_data import seed_all_demo_data
 from ..agent.llm import OllamaClient
 from ..agent.session import SessionManager
 
-from .routes import sessions, tools, findings, stash, cve, reports, integrations, ctem, probes, identity, browser, mitre
+from .routes import sessions, tools, findings, stash, cve, reports, integrations, ctem, probes, identity, browser, mitre, redteam, blue, purple
 from .routes import eval as eval_router
 from .websocket import router as ws_router
 
@@ -302,6 +302,9 @@ def create_app() -> FastAPI:
     app.include_router(browser.router, dependencies=auth)
     app.include_router(mitre.router, dependencies=auth)
     app.include_router(eval_router.router, dependencies=auth)
+    app.include_router(redteam.router, dependencies=auth)
+    app.include_router(blue.router, dependencies=auth)
+    app.include_router(purple.router, dependencies=auth)
     app.include_router(ws_router)
 
     # Health check

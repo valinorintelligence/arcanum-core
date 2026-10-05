@@ -9,6 +9,7 @@ from typing import Any, AsyncGenerator
 
 from .llm import OllamaClient
 from .tools import NATIVE_TOOLS, ToolExecutor, get_tools_for_phase, _auto_repair_command
+from ..redteam.action_classes import classify as _rt_classify, hitl_tier as _rt_hitl_tier, ActionClass
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -65,11 +66,164 @@ class AgentEngine:
         self._native_tool_runs: dict[str, int] = {}
         self._last_executed_tool: str | None = None
         self._current_user_request: str = ""
+        # F0 governance (ROE/audit/sessions): lazily built from the tool
+        # executor's DB. "unset" sentinel distinguishes "not yet built" from
+        # "built but unavailable" (None).
+        self._gov_cache: Any = "unset"
+        self._active_engagement: dict | None = None
+        self._engagement_loaded = False
+
+    # Internal/bookkeeping tools never touch a target — skip them in the audit
+    # trail so the log stays a meaningful record of real actions.
+    _AUDIT_SKIP = frozenset({
+        "read_memory", "update_memory", "query_graph", "query_playbook",
+        "save_playbook", "read_file", "create_file", "web_search",
+    })
 
     def abort(self) -> None:
         """Signal the agent execution loop to stop immediately."""
         self._abort_requested = True
         self.pending_action = None
+
+    # -- F0 governance (ROE / audit / kill-switch) --------------------------
+
+    def _governance(self) -> dict | None:
+        """Lazily build the F0 governance helpers from the tool executor's DB.
+
+        Returns None when there is no usable DB (e.g. mock/legacy constructions),
+        so every governance hook degrades to a no-op instead of failing."""
+        cache = getattr(self, "_gov_cache", "unset")
+        if cache != "unset":
+            return cache
+        gov = None
+        try:
+            db = getattr(self.tool_executor, "db", None)
+            if db is not None and all(hasattr(db, m) for m in ("fetch_all", "fetch_one", "execute")):
+                from ..redteam.engagement import EngagementManager
+                from ..redteam.audit import ActionAuditLog
+                from ..redteam.sessions import SessionRegistry
+                gov = {
+                    "engagements": EngagementManager(db),
+                    "audit": ActionAuditLog(db),
+                    "sessions": SessionRegistry(db),
+                }
+        except Exception:
+            gov = None
+        self._gov_cache = gov
+        return gov
+
+    def _session_id(self):
+        s = self.session
+        if isinstance(s, dict):
+            return s.get("id") or s.get("name")
+        return getattr(s, "id", None) or getattr(s, "name", None)
+
+    def _session_target(self):
+        s = self.session
+        if isinstance(s, dict):
+            return s.get("target")
+        return getattr(s, "target", None)
+
+    def _primary_target(self, arguments: dict | None):
+        """Best-effort primary target of a tool call (for the audit trail/ROE)."""
+        if not isinstance(arguments, dict):
+            return self._session_target()
+        if "command" in arguments:
+            return self._session_target()
+        for k in ("url", "domain", "hostname", "target", "host", "target_url",
+                  "authorization_url", "metadata_url", "bucket_name", "ioc", "entry_point"):
+            if arguments.get(k):
+                return arguments.get(k)
+        return self._session_target()
+
+    async def _get_active_engagement(self) -> dict | None:
+        """Return (cached per run) the active engagement for this session, or None."""
+        if getattr(self, "_engagement_loaded", False):
+            return self._active_engagement
+        self._engagement_loaded = True
+        self._active_engagement = None
+        gov = self._governance()
+        if not gov:
+            return None
+        try:
+            self._active_engagement = await gov["engagements"].active_for(self._session_id())
+        except Exception:
+            self._active_engagement = None
+        return self._active_engagement
+
+    async def _roe_authorize(self, tool_name: str, arguments: dict) -> str | None:
+        """Deterministic ROE gate. Returns a block reason (str) if the active
+        engagement forbids this action's class/target, else None. A blocked
+        attempt is recorded in the immutable audit log. No active engagement =>
+        None (legacy behavior preserved)."""
+        gov = self._governance()
+        if not gov:
+            return None
+        try:
+            eng = await self._get_active_engagement()
+        except Exception:
+            eng = None
+        if not eng:
+            return None
+        try:
+            cls = _rt_classify(tool_name, arguments)
+            target = self._primary_target(arguments)
+            allowed, reason = gov["engagements"].is_allowed(eng, cls, target)
+        except Exception:
+            return None
+        if allowed:
+            return None
+        await self._audit_record(tool=tool_name, arguments=arguments, action_cls=cls,
+                                 decision="blocked_by_roe", risk=None, result=None, target=target)
+        return reason
+
+    async def _audit_record(self, *, tool: str, arguments: dict, action_cls,
+                            decision: str, risk: str | None = None,
+                            result: dict | None = None, target=None) -> None:
+        """Append an action to the immutable audit trail (best-effort, masked)."""
+        gov = self._governance()
+        if not gov or tool in self._AUDIT_SKIP:
+            return
+        try:
+            from ..redteam.audit import summarize_result
+            try:
+                eng = await self._get_active_engagement()
+            except Exception:
+                eng = None
+            cls_val = getattr(action_cls, "value", str(action_cls))
+            await gov["audit"].record(
+                tool=tool,
+                action_class=cls_val,
+                decision=decision,
+                target=target if target is not None else self._primary_target(arguments),
+                risk=risk,
+                arguments=arguments,
+                result_summary=summarize_result(result),
+                engagement_id=(eng or {}).get("id"),
+                session_id=self._session_id(),
+                operator=self.mode if isinstance(self.mode, str) else None,
+                deconfliction_tag=(eng or {}).get("deconfliction_tag"),
+            )
+        except Exception:
+            pass
+
+    async def kill_switch(self) -> dict:
+        """Global kill-switch for THIS engine: abort the run and clean up every
+        open foothold/implant of the active engagement (cleanup obligation)."""
+        self.abort()
+        summary = {"aborted": True, "cleaned_sessions": 0}
+        gov = self._governance()
+        if not gov:
+            return summary
+        try:
+            eng = await self._get_active_engagement()
+            res = await gov["sessions"].cleanup((eng or {}).get("id") if eng else None)
+            summary["cleaned_sessions"] = res.get("cleaned", 0)
+            await self._audit_record(tool="kill_switch", arguments={}, action_cls=ActionClass.PASSIVE,
+                                     decision="kill_switch", result=res)
+        except Exception:
+            pass
+        return summary
 
     # -- Public API ---------------------------------------------------------
 
@@ -103,6 +257,9 @@ class AgentEngine:
         self.iteration = 0
         self._repeat_after_success = 0
         self._stagnation_aborted = False
+        # Re-resolve the active engagement at the start of each run (an operator
+        # may have created/closed one between turns).
+        self._engagement_loaded = False
         self.messages.append({"role": "user", "content": prompt_with_context})
 
         # Deep recon autostart: bare domain triggers full pipeline
@@ -471,6 +628,24 @@ class AgentEngine:
                                          f"autorizado ({self._scope_label()}). Nada foi executado.")}
                         continue
 
+                    # --- F0: Engagement (ROE) class-based authorization ---
+                    # If an engagement is active, an action whose class the ROE
+                    # does not permit (or whose window/scope is out of contract)
+                    # is blocked deterministically and recorded. With no active
+                    # engagement this is a no-op (legacy operator-driven behavior).
+                    roe_reason = await self._roe_authorize(tool_name, arguments)
+                    if roe_reason:
+                        self.messages.append({
+                            "role": "tool", "name": tool_name,
+                            "content": (f"[BLOQUEADO POR ROE] {roe_reason}. Ação NÃO executada. "
+                                        "Escolha uma ação dentro das classes autorizadas pelo engajamento "
+                                        "ou solicite ao operador a ampliação do contrato (ROE)."),
+                        })
+                        yield {"type": "error", "subtype": "blocked_by_roe", "tool": tool_name,
+                               "iteration": self.iteration,
+                               "error": f"Ação bloqueada pelo contrato de engajamento (ROE): {roe_reason}"}
+                        continue
+
                     # Native tool deduplication / stagnation guard:
                     if tool_name != "execute":
                         # 1. Immediate consecutive stagnation guard (calling the same tool 2x in a row)
@@ -589,6 +764,12 @@ class AgentEngine:
 
                     # Mode-based gating
                     risk = self._assess_risk(tool_name, arguments)
+                    # F0: the action CLASS drives the HITL tier. EXPLOIT /
+                    # POST_EXPLOIT / DESTRUCTIVE require dual approval regardless
+                    # of mode; PASSIVE/ACTIVE keep the existing mode behavior.
+                    action_cls = _rt_classify(tool_name, arguments)
+                    tier = _rt_hitl_tier(action_cls)
+                    approvals_required = 2 if tier == "double" else 1
                     requires_approval = False
                     # Internal bookkeeping tools never touch the target and carry
                     # no risk — don't gate them (avoids approval spam on every
@@ -607,21 +788,34 @@ class AgentEngine:
                         from ..core.config import get_config
                         if risk == "HIGH" and not get_config().allow_destructive_testing:
                             requires_approval = True
+                    # Dual-approval classes always require human sign-off.
+                    if tier == "double":
+                        requires_approval = True
 
                     if requires_approval:
-                        self.pending_action = {"tool": tool_name, "arguments": arguments}
+                        self.pending_action = {
+                            "tool": tool_name, "arguments": arguments,
+                            "action_class": action_cls.value,
+                            "approvals_required": approvals_required,
+                            "approvals_given": 0,
+                        }
                         risk_pt = {"LOW": "BAIXO", "MEDIUM": "MÉDIO", "HIGH": "ALTO"}.get(risk, risk)
+                        dual_note = ("\n\n⚠️ DUPLA APROVAÇÃO: esta ação exige duas aprovações "
+                                     "independentes do operador antes de executar.") if approvals_required > 1 else ""
                         yield {
                             "type": "suggestion",
                             "tool": tool_name,
                             "arguments": arguments,
                             "risk": risk,
+                            "action_class": action_cls.value,
+                            "approvals_required": approvals_required,
+                            "approvals_given": 0,
                             "explanation": explanation,
                             "message": (
                                 f"Modo {self.mode.capitalize()}: aprovação do operador necessária (Risco: {risk_pt}).\n\n"
                                 f"📌 O QUE FAZ:\n{explanation['what']}\n\n"
                                 f"🎯 POR QUE EXECUTAR:\n{explanation['why']}\n\n"
-                                f"⚙️ PARÂMETROS / EXEMPLO:\n{explanation['params']}"
+                                f"⚙️ PARÂMETROS / EXEMPLO:\n{explanation['params']}" + dual_note
                             ),
                         }
                         return  # Pause loop until operator approves or cancels
@@ -630,6 +824,10 @@ class AgentEngine:
                     result = await self.tool_executor.execute_tool(tool_name, arguments)
                     self._last_executed_tool = tool_name
                     self._native_repeat_count = 0
+                    # F0: immutable audit trail of the executed action (masked args).
+                    await self._audit_record(tool=tool_name, arguments=arguments,
+                                             action_cls=action_cls, decision="executed",
+                                             risk=risk, result=result)
                     if tool_name == "execute":
                         self._record_cmd_result(arguments.get("command", ""), result)
                         await self._auto_learn(arguments.get("command", ""), result, self.current_phase)
@@ -679,24 +877,60 @@ class AgentEngine:
         yield {"type": "error", "error": f"Limite máximo de iterações ({MAX_ITERATIONS}) atingido", "iteration": self.iteration}
 
     async def execute_approved(self) -> AsyncGenerator[dict, None]:
-        """Execute a tool action previously held for operator approval."""
+        """Execute a tool action previously held for operator approval.
+
+        Dual-approval classes (EXPLOIT/POST_EXPLOIT/DESTRUCTIVE) require two
+        independent approvals: the first approval re-arms the pending action and
+        requests the second; only the final approval executes."""
         if not self.pending_action:
             yield {"type": "info", "content": "Nenhuma ação pendente de aprovação."}
             return
 
         action = self.pending_action
-        self.pending_action = None
         tool_name = action["tool"]
         arguments = action["arguments"]
+        action_cls = _rt_classify(tool_name, arguments)
+
+        # --- F0 dual approval gate ---
+        need = int(action.get("approvals_required", 1) or 1)
+        given = int(action.get("approvals_given", 0) or 0) + 1
+        if given < need:
+            # Keep pending; wait for the next independent approval.
+            self.pending_action = {**action, "approvals_given": given}
+            explanation = self._explain_tool_action(tool_name, arguments)
+            yield {
+                "type": "suggestion",
+                "tool": tool_name,
+                "arguments": arguments,
+                "risk": self._assess_risk(tool_name, arguments),
+                "action_class": action_cls.value,
+                "approvals_required": need,
+                "approvals_given": given,
+                "explanation": explanation,
+                "message": (
+                    f"Aprovação {given}/{need} registrada. DUPLA APROVAÇÃO exigida: "
+                    f"é necessária mais {need - given} aprovação independente do operador "
+                    f"antes de executar '{tool_name}'."
+                ),
+            }
+            return
+
+        self.pending_action = None
 
         yield {"type": "thinking", "content": f"Executando ação aprovada pelo operador: {tool_name}"}
         try:
             result = await self.tool_executor.execute_tool(tool_name, arguments)
         except Exception as exc:
+            await self._audit_record(tool=tool_name, arguments=arguments, action_cls=action_cls,
+                                     decision="executed_error", result={"success": False, "error": str(exc)})
             yield {"type": "error", "error": f"Falha na execução da ferramenta {tool_name}: {exc}", "iteration": self.iteration}
             return
         self._last_executed_tool = tool_name
         self._native_repeat_count = 0
+        # F0: immutable audit trail of the operator-approved action.
+        await self._audit_record(tool=tool_name, arguments=arguments, action_cls=action_cls,
+                                 decision="executed_approved",
+                                 risk=self._assess_risk(tool_name, arguments), result=result)
         if tool_name == "execute":
             self._record_cmd_result(arguments.get("command", ""), result)
             await self._auto_learn(arguments.get("command", ""), result, self.current_phase)
@@ -3364,7 +3598,8 @@ class AgentEngine:
                          "audit_webhook_ssrf_and_dns_rebinding",
                          "audit_ad_dacl_abuse_paths", "audit_windows_token_privileges",
                          "audit_cicd_workflow_poisoning", "audit_mtls_and_mesh_security",
-                         "audit_ebpf_integrity_and_rootkits"):
+                         "audit_ebpf_integrity_and_rootkits",
+                         "verify_detection_active"):
             return "LOW"
         return "MEDIUM"
 
