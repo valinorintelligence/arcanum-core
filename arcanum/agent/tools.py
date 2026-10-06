@@ -2207,6 +2207,30 @@ def _jaccard_similarity(a: str, b: str) -> float:
     return len(intersection) / len(union)
 
 
+def _bare_host(token: str, keep_path: bool = False) -> str:
+    """Normalize a target token to a bare host for tools that take a HOST, not a
+    URL/host:port. Strips a scheme and a trailing ':PORT' (host:port), and — unless
+    keep_path — a trailing path. Leaves CIDR (/24) and bare IPv6 alone.
+
+    Fixes the common LLM mistake of passing 'host.docker.internal:8080' to nmap/
+    subfinder, which made nmap fail with 'Failed to resolve host.docker.internal:8080'.
+    """
+    t = re.sub(r"^[a-zA-Z][\w+.\-]*://", "", token)      # drop scheme
+    if not keep_path:
+        t = t.split("/")[0]
+    m = re.match(r"^([A-Za-z0-9_.\-]+):(\d{1,5})$", t)     # host:port (not IPv6/CIDR)
+    if m:
+        t = m.group(1)
+    return t
+
+
+def _looks_like_hostport(token: str) -> bool:
+    """A positional target that carries a scheme or a :PORT a host-only tool can't take."""
+    if token.startswith("-"):
+        return False
+    return bool("://" in token or re.match(r"^[A-Za-z0-9_.\-]+:\d{1,5}$", token))
+
+
 def _auto_repair_command(cmd: str) -> str:
     """Auto-repair common command-line syntax mistakes made by LLMs."""
     if not cmd or not isinstance(cmd, str):
@@ -2229,7 +2253,8 @@ def _auto_repair_command(cmd: str) -> str:
                 else:
                     other_args.append(p)
             if target_arg:
-                cmd = f"subfinder -d {target_arg} {' '.join(other_args)}".strip()
+                # subfinder -d expects a bare domain (no scheme/port/path).
+                cmd = f"subfinder -d {_bare_host(target_arg)} {' '.join(other_args)}".strip()
 
     elif binary in ("httpx", "httpx-toolkit"):
         # On the Kali sandbox, /usr/bin/httpx is the *Python* HTTP client (CLI
@@ -2338,6 +2363,10 @@ def _auto_repair_command(cmd: str) -> str:
         if not any(p in scan_types for p in lowers):
             rest = ["-sT"] + rest  # force unprivileged TCP connect scan
             lowers = [p.lower() for p in rest]
+        # A target like 'host.docker.internal:8080' or 'http://host:8080' makes nmap
+        # fail ("Failed to resolve ...:8080") — nmap takes a bare host (+ ports via -p).
+        # Strip scheme/:port from positional host tokens (keep CIDR like /24 intact).
+        rest = [(_bare_host(p, keep_path=True) if _looks_like_hostport(p) else p) for p in rest]
         # Ensure -Pn so firewalls dropping ICMP ping don't cause false
         # 'Host seems down' aborts (common on cloud/VPS targets).
         has_pn = any(p in ("-pn", "-p0") for p in lowers)
@@ -3324,9 +3353,15 @@ class ToolExecutor:
             async with httpx.AsyncClient(timeout=10.0, verify=False, follow_redirects=True) as client:
                 resp = await client.get(target_url)
         except Exception as exc:
+            # Include the exception TYPE so the error is never empty (httpx ConnectError
+            # often has a blank str()). This is a HOST-process request: a Docker-only
+            # name like host.docker.internal may not resolve here — use the host-published
+            # address (e.g. localhost:8080) for native audits, or host.docker.internal for
+            # sandbox 'execute' tools.
+            detail = f"{type(exc).__name__}: {exc}".strip().rstrip(":")
             return {
                 "url": target_url,
-                "error": f"Falha na requisição HTTP: {str(exc)}",
+                "error": f"Falha na requisição HTTP ({detail})",
                 "score": 0,
                 "grade": "F",
                 "missing_headers": [],

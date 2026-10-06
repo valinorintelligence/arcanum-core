@@ -1,7 +1,35 @@
 import pytest
 from unittest.mock import MagicMock
 from arcanum.agent.engine import AgentEngine
-from arcanum.agent.tools import _auto_repair_command, ToolExecutor
+from arcanum.agent.tools import _auto_repair_command, _bare_host, ToolExecutor
+
+
+def test_bare_host_strips_scheme_port_path_keeps_cidr():
+    assert _bare_host("host.docker.internal:8080") == "host.docker.internal"
+    assert _bare_host("http://host.docker.internal:8080/x") == "host.docker.internal"
+    assert _bare_host("10.0.0.5:22") == "10.0.0.5"
+    # CIDR must survive (keep_path) — it has no :port to strip.
+    assert _bare_host("10.0.0.0/24", keep_path=True) == "10.0.0.0/24"
+    assert _bare_host("example.com") == "example.com"
+
+
+def test_auto_repair_nmap_strips_hostport_target():
+    # The real gap: nmap got 'host.docker.internal:8080' and failed to resolve it.
+    repaired = _auto_repair_command("nmap -sT -Pn -sV -p 80,443,8080 host.docker.internal:8080")
+    assert "host.docker.internal:8080" not in repaired
+    assert "host.docker.internal" in repaired
+    assert "-p 80,443,8080" in repaired          # the port LIST (flag value) is untouched
+
+
+def test_auto_repair_nmap_keeps_cidr_and_portlist():
+    repaired = _auto_repair_command("nmap -p 22,80 10.0.0.0/24")
+    assert "10.0.0.0/24" in repaired and "-p 22,80" in repaired
+
+
+def test_auto_repair_subfinder_strips_scheme_and_port():
+    repaired = _auto_repair_command("subfinder http://host.docker.internal:8080 -silent")
+    assert repaired.startswith("subfinder -d host.docker.internal ")
+    assert ":8080" not in repaired and "http://" not in repaired
 
 
 def test_auto_repair_katana_extension_filter_and_limits():

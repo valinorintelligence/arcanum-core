@@ -533,6 +533,28 @@
             </div>
           </div>
 
+          <!-- Operações rápidas (um clique, sem jargão técnico) -->
+          <div x-data="{ opsOpen: true }" class="border-t border-gray-800 bg-surface-900/60 px-3 pt-2 pb-1">
+            <button @click="opsOpen = !opsOpen" title="Mostrar/ocultar as operações prontas" class="flex items-center gap-1.5 text-[11px] font-semibold text-gray-400 hover:text-cyan-400 transition-colors mb-1.5">
+              <span x-text="opsOpen ? '▾' : '▸'"></span>
+              <span>⚡ Operações rápidas</span>
+              <span class="text-gray-600 font-normal hidden sm:inline">— clique e o agente executa; você não precisa digitar nada</span>
+            </button>
+            <div x-show="opsOpen" class="flex gap-2 overflow-x-auto pb-1">
+              <template x-for="op in quickOps" :key="op.title">
+                <button
+                  @click="sendMessage(op.prompt); chatInput = ''"
+                  :title="op.prompt"
+                  class="flex-shrink-0 w-56 text-left bg-gray-800 hover:bg-gray-700 border border-gray-700 hover:border-cyan-600 rounded-lg px-3 py-2 transition-colors">
+                  <div class="flex items-center gap-1.5 text-sm font-semibold text-gray-100">
+                    <span x-text="op.icon"></span><span x-text="op.title"></span>
+                  </div>
+                  <div class="text-[11px] text-gray-400 mt-0.5 leading-snug" x-text="op.desc"></div>
+                </button>
+              </template>
+            </div>
+          </div>
+
           <!-- Chat Input -->
           <div class="border-t border-gray-800 p-3 bg-surface-900">
             <div class="flex items-center gap-2">
@@ -556,6 +578,16 @@
               >
                 <span>🎯</span>
                 <span class="hidden sm:inline">Missões & Prompts</span>
+              </button>
+
+              <!-- Console direto no Kali (sem IA) -->
+              <button
+                @click="currentView = 'console'"
+                title="Abrir o console direto do sandbox Kali: envie comandos sem passar pela IA, com biblioteca de comandos explicados"
+                class="bg-gray-800 hover:bg-gray-700 text-emerald-400 px-3 py-2.5 rounded-lg border border-gray-700 text-xs font-semibold transition-colors flex items-center gap-1.5 whitespace-nowrap shadow-sm"
+              >
+                <span>💻</span>
+                <span class="hidden sm:inline">Console</span>
               </button>
 
               <!-- Stop / Interromper Button -->
@@ -634,6 +666,95 @@
               </template>
               <div x-show="sessionStash.length === 0" class="px-3 py-6 text-center text-xs text-gray-600">Nenhum item no cofre ainda</div>
             </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- CONSOLE VIEW (direto no sandbox Kali, sem LLM)               -->
+    <!-- ============================================================ -->
+    <div x-show="currentView === 'console'" x-cloak class="p-4 md:p-6 space-y-4 fade-in">
+      <div class="flex items-center justify-between">
+        <div>
+          <h2 class="text-lg font-semibold text-white">💻 Console do Kali (direto, sem IA)</h2>
+          <p class="text-xs text-gray-500">Os comandos rodam no sandbox Kali isolado — sem passar pela IA, mas ainda classificados, checados contra o ROE e registrados no audit. <span x-show="currentSession" x-text="'Operação: ' + (currentSession?.name || '')"></span></p>
+        </div>
+        <button @click="currentSession ? (currentView='session') : (currentView='dashboard')" title="Voltar" class="text-gray-500 hover:text-gray-300 text-xs">← Voltar</button>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <!-- Terminal -->
+        <div class="lg:col-span-2 flex flex-col bg-surface-900 border border-gray-800 rounded-xl overflow-hidden">
+          <div class="flex items-center justify-between px-3 py-2 border-b border-gray-800">
+            <span class="text-xs font-semibold text-gray-300">Saída <span class="text-[10px] font-normal text-emerald-500">● ao vivo</span></span>
+            <button @click="consoleHistory = []" class="text-[11px] text-gray-500 hover:text-gray-300" title="Limpar a saída">Limpar</button>
+          </div>
+          <div id="console-log" class="h-[55vh] overflow-y-auto p-3 font-mono text-xs space-y-3 bg-surface-950">
+            <template x-if="!consoleHistory.length">
+              <div class="text-gray-600">Escolha um comando na biblioteca ao lado (botão Inserir/Executar) ou digite abaixo. Ajuste o &lt;alvo&gt; antes de executar.</div>
+            </template>
+            <template x-for="(e, i) in consoleHistory" :key="i">
+              <div class="border-l-2 pl-2" :class="e.blocked ? 'border-amber-600' : (e.exit_code === 0 ? 'border-emerald-700' : 'border-gray-700')">
+                <div class="flex items-center gap-2 text-cyan-400 flex-wrap">
+                  <span>$</span><span class="break-all" x-text="e.command"></span>
+                  <span x-show="e.action_class" class="text-[10px] px-1 rounded bg-gray-800 text-gray-400" x-text="e.action_class"></span>
+                  <span x-show="e.running" class="text-amber-400 animate-pulse">executando…</span>
+                </div>
+                <template x-if="e.blocked">
+                  <div class="text-amber-400 mt-1">⛔ Bloqueado pelo ROE: <span x-text="e.reason"></span></div>
+                </template>
+                <pre x-show="e.stdout" class="text-gray-300 whitespace-pre-wrap mt-1" x-text="e.stdout"></pre>
+                <pre x-show="e.stderr" class="text-red-400 whitespace-pre-wrap mt-1" x-text="e.stderr"></pre>
+                <div x-show="e.exit_code !== null && !e.running" class="text-[10px] text-gray-600 mt-1">
+                  exit=<span x-text="e.exit_code"></span><template x-if="e.duration"><span> · <span x-text="e.duration"></span>s</span></template><template x-if="e.timed_out"><span class="text-amber-500"> · ⏱ tempo limite excedido (processo encerrado)</span></template>
+                </div>
+              </div>
+            </template>
+          </div>
+          <div class="flex items-center gap-2 p-3 border-t border-gray-800">
+            <input id="console-input" type="text" x-model="consoleInput" @keydown.enter="runConsole()"
+              placeholder="ex: nmap -sT -Pn -sV -p- host.docker.internal"
+              class="flex-1 bg-gray-800 border border-gray-700 text-xs text-gray-200 rounded-lg px-3 py-2 font-mono focus:ring-1 focus:ring-cyan-500 focus:border-cyan-500 placeholder:text-gray-600" />
+            <button @click="runConsole()" :disabled="consoleRunning" title="Executar no sandbox" class="bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white text-xs font-semibold px-4 py-2 rounded-lg transition-colors">
+              <span x-show="!consoleRunning">Executar</span><span x-show="consoleRunning">…</span>
+            </button>
+            <button x-show="consoleRunning" @click="cancelConsole()" title="Interromper o comando em execução" class="bg-red-700 hover:bg-red-600 text-white text-xs font-semibold px-3 py-2 rounded-lg transition-colors">Parar</button>
+          </div>
+        </div>
+
+        <!-- Biblioteca de comandos -->
+        <div class="bg-surface-900 border border-gray-800 rounded-xl overflow-hidden flex flex-col">
+          <div class="px-3 py-2 border-b border-gray-800">
+            <span class="text-xs font-semibold text-gray-300">Biblioteca de comandos</span>
+            <input type="text" x-model="consoleSearch" placeholder="Buscar (ex: nmap, senha, instalar)..." class="mt-2 w-full bg-gray-800 border border-gray-700 text-[11px] text-gray-200 rounded px-2 py-1.5 focus:ring-1 focus:ring-cyan-500" />
+          </div>
+          <div class="h-[60vh] overflow-y-auto p-2 space-y-3">
+            <template x-for="cat in consoleCatalogFiltered()" :key="cat.cat">
+              <div>
+                <div class="text-[11px] font-semibold text-gray-400 px-1 mb-1" x-text="cat.cat"></div>
+                <div class="space-y-1.5">
+                  <template x-for="it in cat.items" :key="it.cmd">
+                    <div class="bg-gray-800/60 border border-gray-800 rounded-lg p-2">
+                      <div class="flex items-center gap-1.5 flex-wrap">
+                        <code class="block text-[11px] text-cyan-300 break-all flex-1" x-text="it.cmd"></code>
+                        <template x-if="it.req"><span class="text-[9px] px-1 rounded bg-amber-900/60 text-amber-300 whitespace-nowrap" title="Nao vem na imagem; instalavel no sandbox via pip --user">requer instalar</span></template>
+                        <template x-if="it.note && !it.req"><span class="text-[9px] px-1 rounded bg-amber-900/60 text-amber-300 whitespace-nowrap" title="Leia a ressalva abaixo">ressalva</span></template>
+                      </div>
+                      <div class="text-[11px] text-gray-300 mt-1"><b>O que faz:</b> <span x-text="it.what"></span></div>
+                      <div class="text-[11px] text-gray-400"><b>Por que:</b> <span x-text="it.why"></span></div>
+                      <div class="text-[10px] text-gray-500 mt-0.5 font-mono break-all"><b>Ex:</b> <span x-text="it.example"></span></div>
+                      <template x-if="it.note"><div class="text-[10px] text-amber-400/90 mt-1">⚠ <span x-text="it.note"></span></div></template>
+                      <div class="flex gap-1.5 mt-1.5">
+                        <button @click="consoleInsert(it.example || it.cmd)" title="Colocar no campo para editar" class="text-[10px] px-2 py-0.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-200">Inserir</button>
+                        <button @click="runConsole(it.example || it.cmd)" :disabled="consoleRunning" title="Executar agora no sandbox" class="text-[10px] px-2 py-0.5 rounded bg-cyan-700 hover:bg-cyan-600 disabled:opacity-50 text-white">Executar</button>
+                        <template x-if="it.req"><button @click="consoleInsert(it.req)" title="Inserir o comando de instalação (pip --user, roda no sandbox)" class="text-[10px] px-2 py-0.5 rounded bg-amber-800 hover:bg-amber-700 text-amber-100">Instalar</button></template>
+                      </div>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </template>
           </div>
         </div>
       </div>
@@ -3001,6 +3122,140 @@
         stats: { ops: 0, targets: 0, findings: {}, stash: 0 },
         globalMode: 'manual',
         chatInput: '',
+        // Operações rápidas: instruções prontas em linguagem simples (sem jargão).
+        // Um clique envia a instrução ao agente — o usuário não precisa saber escrever.
+        quickOps: [
+          {
+            icon: '🔎',
+            title: 'Ver o que meu site expõe',
+            desc: 'Mapeia tecnologias, portas, cabeçalhos e falhas conhecidas do alvo. Só observa — não ataca nem causa dano.',
+            prompt: 'Faça um reconhecimento completo e uma análise de vulnerabilidades do alvo desta operação: identifique tecnologias, portas e serviços abertos, audite os cabeçalhos de segurança HTTP e rode uma varredura de falhas conhecidas. Crie findings para tudo que encontrar. Não explore nada, apenas mapeie e relate.'
+          },
+          {
+            icon: '🧪',
+            title: 'Testar se dá para invadir (lab)',
+            desc: 'No seu laboratório autorizado, tenta explorar uma falha para provar o acesso e guardar a evidência. Precisa de um engajamento ativo.',
+            prompt: 'Neste laboratório autorizado e dentro do engajamento ativo, faça o acesso inicial: use a ferramenta map_service_to_exploits no alvo para correlacionar serviços a CVEs candidatos e, havendo uma vulnerabilidade web explorável (por exemplo injeção de comando), use a ferramenta exploit_webapp confirmando o acesso, registrando o foothold com prova e criando um finding.'
+          },
+          {
+            icon: '🛡️',
+            title: 'Testar minhas defesas',
+            desc: 'Simula técnicas de ataque conhecidas e mede se seus controles (SIEM/EDR) detectariam. Não causa dano.',
+            prompt: 'Rode uma campanha Purple contra o alvo: execute ou simule honestamente as técnicas ATT&CK mais relevantes, meça se seriam detectadas pelos controles implantados e gere um relatório de cobertura destacando as lacunas. Não cause impacto destrutivo.'
+          },
+          {
+            icon: '📋',
+            title: 'Gerar o relatório',
+            desc: 'Junta tudo que foi descoberto nesta operação num relatório pronto para compartilhar.',
+            prompt: 'Compile o relatório final desta operação com todos os findings, evidências e recomendações.'
+          }
+        ],
+        // ===== Console direto (sem LLM) — roda no sandbox Kali, governado por ROE+audit =====
+        consoleInput: '',
+        consoleRunning: false,
+        consoleHistory: [],   // {command, running, stdout, stderr, exit_code, blocked, reason, action_class, duration}
+        consoleSearch: '',
+        consoleWs: null,          // dedicated WebSocket for live streaming (separate from the agent WS)
+        consoleWsConnected: false,
+        _consoleActive: null,     // the history entry currently being streamed
+        // Catalogo organizado POR OBJETIVO (nao por fase). Campos:
+        //   req  = comando que INSTALA a ferramenta e REALMENTE roda no sandbox (pip --user) -> botao "Instalar"
+        //   note = ressalva honesta (nao vem na imagem / precisa de privilegio). Sem req + com note => rebuild da imagem.
+        // Preinstalado na imagem (Dockerfile.sandbox): subfinder dnsx nmap masscan httpx-toolkit katana theHarvester
+        //   nuclei sqlmap feroxbuster ffuf arjun wpscan testssl.sh crackmapexec snmp tshark bettercap chisel hashcat
+        //   hydra metasploit impacket-scripts exiftool gowitness dalfox graphqlmap jwt-tool sherlock holehe trufflehog
+        //   pwncat-cs haiti bloodhound(-python) linpeas + curl/wget/git/jq/python3. SecLists em /opt/seclists.
+        consoleCatalog: [
+          { cat: '⬇️ Setup & instalação de ferramentas', items: [
+            { cmd: 'nuclei -update-templates', what: 'Baixa/atualiza os templates do Nuclei.', why: 'Garante as deteccoes mais recentes antes de escanear.', example: 'nuclei -update-templates' },
+            { cmd: 'which <ferramenta>', what: 'Mostra se/onde a ferramenta esta instalada na imagem.', why: 'Conferir disponibilidade antes de usar (evita erro "command not found").', example: 'which nmap nuclei httpx-toolkit wpscan crackmapexec' },
+            { cmd: 'pip3 install --user --break-system-packages <ferramenta>', what: 'Instala uma ferramenta Python AGORA no sandbox (em ~/.local, sem root).', why: 'O sandbox roda como usuario sem privilegio: apt nao funciona, mas pip --user sim.', example: 'pip3 install --user --break-system-packages droopescan; ~/.local/bin/droopescan --help' },
+            { cmd: 'ls /opt/seclists/Discovery/Web-Content | head', what: 'Lista as wordlists do SecLists ja incluidas.', why: 'Saber quais listas usar em ffuf/feroxbuster/hydra.', example: 'ls /opt/seclists/Passwords | head' },
+            { cmd: '# Ferramenta apt (nikto, whatweb, john...) -> rebuild', what: 'apt NAO roda no sandbox (usuario nobody). Adicione o pacote ao Dockerfile.sandbox e reconstrua.', why: 'Ferramentas de sistema entram pela imagem, nao em tempo de execucao.', example: '# No HOST: edite Dockerfile.sandbox e rode: arcanum sandbox build', note: 'Executar no HOST, nao no console (o botao Executar aqui vira no-op).' },
+          ]},
+          { cat: '🔎 Recon & OSINT', items: [
+            { cmd: 'subfinder -d <dominio> -silent', what: 'Descobre subdominios via fontes publicas (OSINT).', why: 'Amplia a superficie de ataque sem tocar no alvo.', example: 'subfinder -d exemplo.com -silent' },
+            { cmd: 'dnsx -d <dominio> -a -resp', what: 'Resolve registros DNS (A/AAAA) dos subdominios.', why: 'Mapeia hosts e IPs reais do alvo.', example: 'subfinder -d exemplo.com -silent | dnsx -a -resp' },
+            { cmd: 'theHarvester -d <dominio> -b crtsh,bing -l 200', what: 'Coleta emails, hosts e nomes em fontes abertas.', why: 'Perfil OSINT do alvo (pessoas e ativos) sem toque direto.', example: 'theHarvester -d exemplo.com -b crtsh,bing -l 200' },
+            { cmd: 'nmap -sT -Pn -sV -p- --min-rate 1000 <host>', what: 'Varre portas (TCP connect) e identifica servicos/versoes.', why: 'Mapeia o que esta exposto e escutando.', example: 'nmap -sT -Pn -sV -p- --min-rate 1000 host.docker.internal' },
+            { cmd: 'httpx-toolkit -u <host> -tech-detect -status-code -title', what: 'Sonda HTTP: status, titulo e tecnologias.', why: 'Confirma servicos web ativos e a stack.', example: 'httpx-toolkit -u host.docker.internal:8080 -tech-detect -status-code -title' },
+            { cmd: 'katana -u <url> -d 3 -silent', what: 'Crawler: mapeia URLs e endpoints do site.', why: 'Descobre a superficie web (rotas, parametros, JS).', example: 'katana -u http://host.docker.internal:8080 -d 3 -silent' },
+            { cmd: 'gowitness single <url>', what: 'Captura screenshot da pagina (recon visual).', why: 'Triagem rapida de muitos hosts/paineis por imagem.', example: 'gowitness single http://host.docker.internal:8080' },
+            { cmd: 'masscan -p1-65535 <host> --rate 1000', what: 'Varredura de portas em massa (muito rapida).', why: 'Cobre /16 rapidamente em redes grandes.', example: 'masscan -p1-1000 host.docker.internal --rate 1000', note: 'Requer raw sockets/root — pode falhar no sandbox (nobody). Prefira nmap -sT.' },
+          ]},
+          { cat: '🌐 Aplicação Web (geral)', items: [
+            { cmd: 'nuclei -u <url> -severity critical,high -rl 50 -c 10', what: 'Varre falhas conhecidas por templates.', why: 'Encontra CVEs, paineis expostos e desconfiguracoes.', example: 'nuclei -u http://host.docker.internal:8080 -severity critical,high -rl 50 -c 10' },
+            { cmd: 'feroxbuster -u <url> -w /opt/seclists/Discovery/Web-Content/common.txt', what: 'Forca bruta recursiva de diretorios/arquivos.', why: 'Descobre rotas ocultas (admin, backups, APIs).', example: 'feroxbuster -u http://host.docker.internal:8080 -w /opt/seclists/Discovery/Web-Content/common.txt' },
+            { cmd: 'ffuf -u <url>/FUZZ -w <wordlist> -mc 200,204,301,302,401,403', what: 'Fuzzing rapido de conteudo/parametros.', why: 'Alternativa ao feroxbuster, otima para VHOST/param fuzzing.', example: 'ffuf -u http://host.docker.internal:8080/FUZZ -w /opt/seclists/Discovery/Web-Content/common.txt -mc 200,301,403' },
+            { cmd: 'arjun -u <url>', what: 'Descobre parametros HTTP ocultos (GET/POST).', why: 'Revela parametros nao documentados para testar.', example: 'arjun -u http://host.docker.internal:8080/vulnerabilities/sqli/' },
+            { cmd: 'sqlmap -u "<url>?param=1" --batch --level 2 --risk 2', what: 'Testa e explora SQL injection.', why: 'Confirma e extrai dados de uma injecao SQL (--dump so com autorizacao).', example: 'sqlmap -u "http://host.docker.internal:8080/vulnerabilities/sqli/?id=1" --batch --cookie="PHPSESSID=...; security=low"' },
+            { cmd: 'dalfox url <url>', what: 'Scanner dedicado de XSS.', why: 'Encontra e prova Cross-Site Scripting com payloads reais.', example: 'dalfox url "http://host.docker.internal:8080/vulnerabilities/xss_r/?name=test"' },
+            { cmd: 'testssl.sh <host:porta>', what: 'Auditoria de TLS/SSL (ciphers, protocolos, falhas).', why: 'Avalia a postura criptografica do servico HTTPS.', example: 'testssl.sh host.docker.internal:443' },
+            { cmd: 'nikto -h <url>', what: 'Scanner web classico (arquivos/config perigosos).', why: 'Cobertura rapida de problemas comuns de servidor web.', example: 'nikto -h http://host.docker.internal:8080', note: 'Nao vem na imagem — adicione "nikto" ao Dockerfile.sandbox e rode: arcanum sandbox build' },
+          ]},
+          { cat: '📝 WordPress', items: [
+            { cmd: 'wpscan --url <url> --no-banner --random-user-agent', what: 'Auditoria geral de WordPress.', why: 'Detecta versao, tema e problemas evidentes.', example: 'wpscan --url http://host.docker.internal:8080 --no-banner --random-user-agent' },
+            { cmd: 'wpscan --url <url> -e vp,u --no-banner', what: 'Enumera plugins vulneraveis (vp) e usuarios (u).', why: 'Foca no que da acesso: plugin com CVE + lista de logins.', example: 'wpscan --url http://host.docker.internal:8080 -e vp,u --no-banner' },
+            { cmd: 'wpscan --url <url> -U <user> -P <passlist> --no-banner', what: 'Brute force de senha no wp-login/xmlrpc.', why: 'Testa credenciais fracas contra usuarios encontrados.', example: 'wpscan --url http://host.docker.internal:8080 -U admin -P /opt/seclists/Passwords/rockyou-75.txt --no-banner' },
+            { cmd: 'curl -s <url>/xmlrpc.php -d "<methodCall>..."', what: 'Testa se o xmlrpc.php esta exposto (amplifica brute force).', why: 'xmlrpc habilitado permite brute force em lote e DDoS via pingback.', example: 'curl -s http://host.docker.internal:8080/xmlrpc.php -d "<?xml version=\\"1.0\\"?><methodCall><methodName>system.listMethods</methodName></methodCall>"' },
+          ]},
+          { cat: '🧩 Outros CMS & frameworks', items: [
+            { cmd: 'nuclei -u <url> -tags <cms>', what: 'Templates do Nuclei por tecnologia (joomla, drupal, magento...).', why: 'Deteccoes especificas do CMS detectado, sem instalar nada.', example: 'nuclei -u http://host.docker.internal:8080 -tags joomla,drupal' },
+            { cmd: 'droopescan scan <cms> -u <url>', what: 'Scanner de Drupal/SilverStripe/Joomla.', why: 'Enumera versao/modulos de CMS nao-WordPress.', example: 'pip3 install --user --break-system-packages droopescan; ~/.local/bin/droopescan scan drupal -u http://host.docker.internal:8080', req: 'pip3 install --user --break-system-packages droopescan' },
+            { cmd: 'joomscan --url <url>', what: 'Scanner dedicado de Joomla.', why: 'Componentes e falhas especificas de Joomla.', example: 'joomscan --url http://host.docker.internal:8080', note: 'Nao vem na imagem — adicione "joomscan" ao Dockerfile.sandbox e rebuild (ou use nuclei -tags joomla).' },
+            { cmd: 'whatweb <url>', what: 'Fingerprint de tecnologias web (CMS/framework/servidor).', why: 'Identifica a stack para escolher o scanner certo.', example: 'whatweb http://host.docker.internal:8080', note: 'Nao vem na imagem — use httpx-toolkit -tech-detect, ou adicione "whatweb" e rebuild.' },
+          ]},
+          { cat: '🔌 APIs & SaaS', items: [
+            { cmd: 'nuclei -u <url> -tags exposure,token,cve -severity high,critical', what: 'Procura segredos/tokens expostos e CVEs de API.', why: 'Alvos SaaS vazam chaves, .env, swagger e endpoints de debug.', example: 'nuclei -u https://api.exemplo.com -tags exposure,token -severity high,critical' },
+            { cmd: 'curl -s <url>/graphql -H "Content-Type: application/json" -d \'{"query":"{__schema{types{name}}}"}\'', what: 'Introspeccao GraphQL (lista o schema inteiro).', why: 'Se introspection estiver on, revela toda a API para atacar.', example: 'curl -s http://host.docker.internal:8080/graphql -H "Content-Type: application/json" -d \'{"query":"{__schema{types{name}}}"}\'' },
+            { cmd: 'graphqlmap -u <url>/graphql', what: 'Explora GraphQL (dump de schema, injecoes).', why: 'Automatiza ataques a endpoints GraphQL.', example: 'graphqlmap -u http://host.docker.internal:8080/graphql' },
+            { cmd: 'jwt_tool <token> -C -d <wordlist>', what: 'Analisa e ataca JSON Web Tokens.', why: 'Testa alg=none, chave fraca e manipulacao de claims em APIs/SaaS.', example: 'jwt_tool eyJhbGciOiJIUzI1NiJ9.eyJ1c2VyIjoiYWRtaW4ifQ.abc123 -C -d /opt/seclists/Passwords/rockyou-75.txt' },
+            { cmd: 'curl -s -I <url> -H "Origin: https://evil.com"', what: 'Testa CORS mal configurado.', why: 'Access-Control-Allow-Origin refletido = roubo de dados cross-site em SaaS.', example: 'curl -s -I http://host.docker.internal:8080/api/user -H "Origin: https://evil.com"' },
+            { cmd: 'nuclei -t http/takeovers -u <alvo>', what: 'Detecta subdomain takeover (CNAME orfao em SaaS).', why: 'Subdominio apontando p/ SaaS desprovisionado = sequestro.', example: 'subfinder -d exemplo.com -silent | nuclei -t http/takeovers' },
+          ]},
+          { cat: '☁️ Cloud & segredos', items: [
+            { cmd: 'trufflehog <fonte>', what: 'Caca credenciais/segredos em repos, dirs e URLs.', why: 'Chaves AWS/API vazadas sao o caminho mais rapido p/ cloud.', example: 'trufflehog git https://github.com/org/repo --only-verified' },
+            { cmd: 'curl -s https://<bucket>.s3.amazonaws.com/', what: 'Testa bucket S3 publico (listagem).', why: 'Buckets abertos expoem dados e as vezes credenciais.', example: 'curl -s https://exemplo-bucket.s3.amazonaws.com/' },
+            { cmd: 'nuclei -u <url> -tags aws,azure,gcp,s3,cloud', what: 'Templates de exposicao em nuvem.', why: 'Metadados, buckets e paineis cloud expostos.', example: 'nuclei -u https://exemplo.com -tags aws,s3,cloud' },
+          ]},
+          { cat: '🔑 Credenciais & brute force', items: [
+            { cmd: 'hydra -L <userlist> -P <passlist> <host> <servico>', what: 'Brute force de login (SSH/FTP/RDP/HTTP...).', why: 'Testa credenciais fracas em um servico de rede.', example: 'hydra -l svc -P /opt/seclists/Passwords/rockyou-75.txt arcanum-internal ssh' },
+            { cmd: 'hydra <host> http-post-form "<path>:<params>:<fail-string>"', what: 'Brute force de formulario de login web.', why: 'Ataca paineis HTTP (DVWA, admin) sem API dedicada.', example: 'hydra -l admin -P /opt/seclists/Passwords/rockyou-75.txt host.docker.internal http-post-form "/login.php:username=^USER^&password=^PASS^:Login failed"' },
+            { cmd: 'crackmapexec <proto> <host> -u <userlist> -p <passlist>', what: 'Password spraying em SMB/WinRM/SSH/LDAP.', why: 'Valida muitas credenciais em rede interna de uma vez.', example: 'crackmapexec ssh arcanum-internal -u svc -p /opt/seclists/Passwords/rockyou-75.txt' },
+            { cmd: 'haiti <hash>', what: 'Identifica o tipo de um hash.', why: 'Define o -m do hashcat / formato do john antes de quebrar.', example: 'haiti 5f4dcc3b5aa765d61d8327deb882cf99' },
+            { cmd: 'hashcat -m <modo> <hashfile> <wordlist>', what: 'Quebra hashes offline (GPU/CPU).', why: 'Recupera senhas a partir de hashes capturados.', example: 'hashcat -m 1000 hashes.txt /opt/seclists/Passwords/rockyou-75.txt' },
+            { cmd: 'john --wordlist=<wordlist> <hashfile>', what: 'Quebra de hashes (John the Ripper).', why: 'Alternativa ao hashcat, otimo p/ formatos variados.', example: 'john --wordlist=/opt/seclists/Passwords/rockyou-75.txt hashes.txt', note: 'Nao vem na imagem — adicione "john" ao Dockerfile.sandbox e rebuild (hashcat ja esta incluido).' },
+          ]},
+          { cat: '💥 Exploração / acesso inicial', items: [
+            { cmd: 'msfconsole -q -x "search <termo>; exit"', what: 'Busca modulos/exploits no Metasploit.', why: 'Acha exploit pronto p/ a versao exata do servico.', example: 'msfconsole -q -x "search type:exploit apache; exit"' },
+            { cmd: 'msfconsole -q -x "use <modulo>; set RHOSTS <host>; run; exit"', what: 'Executa um modulo do Metasploit.', why: 'Explora uma vuln usando um modulo estabelecido.', example: 'msfconsole -q -x "use auxiliary/scanner/http/http_version; set RHOSTS host.docker.internal; run; exit"' },
+            { cmd: 'nmap -Pn --script vuln -p <portas> <host>', what: 'Scripts NSE de deteccao de vulnerabilidades.', why: 'Checagens de vuln embutidas no nmap.', example: 'nmap -Pn --script vuln -p 80,443 host.docker.internal' },
+            { cmd: 'searchsploit <produto versao>', what: 'Busca exploits conhecidos (Exploit-DB) offline.', why: 'Acha PoCs para a versao exata do servico.', example: 'searchsploit apache 2.4.49', note: 'Nao vem na imagem — adicione "exploitdb" ao Dockerfile.sandbox, ou use msfconsole search.' },
+          ]},
+          { cat: '🛰️ Pós-exploração / lateral / AD', items: [
+            { cmd: 'crackmapexec <proto> <host> -u <user> -p <senha>', what: 'Valida credencial e executa em rede (SMB/WinRM/SSH/LDAP).', why: 'Autentica e age em hosts internos apos obter acesso.', example: 'crackmapexec ssh arcanum-internal -u svc -p Lab12345' },
+            { cmd: 'impacket-GetUserSPNs <dom>/<user>:<senha> -request', what: 'Kerberoasting: extrai tickets de contas de servico.', why: 'Hashes de SPN sao quebraveis offline -> escalada em AD.', example: 'impacket-GetUserSPNs LAB.local/svc:Lab12345 -dc-ip 10.0.0.10 -request' },
+            { cmd: 'impacket-GetNPUsers <dom>/ -usersfile <lista> -no-pass', what: 'AS-REP roasting: contas sem pre-auth Kerberos.', why: 'Recupera hashes sem credencial valida (so a lista de users).', example: 'impacket-GetNPUsers LAB.local/ -usersfile users.txt -no-pass -dc-ip 10.0.0.10' },
+            { cmd: 'impacket-secretsdump <dom>/<user>:<senha>@<host>', what: 'Extrai hashes/segredos (SAM/LSA/NTDS).', why: 'Coleta credenciais de um host comprometido.', example: 'impacket-secretsdump LAB/admin:senha@10.0.0.9' },
+            { cmd: 'bloodhound-python -d <dom> -u <user> -p <senha> -c All -ns <dc-ip>', what: 'Coleta o grafo de ataque do Active Directory.', why: 'Revela caminhos de escalada ate Domain Admin.', example: 'bloodhound-python -d LAB.local -u svc -p Lab12345 -c All -ns 10.0.0.10' },
+            { cmd: 'linpeas', what: 'Enumera vetores de escalada de privilegio locais.', why: 'Apos um foothold, acha SUID/cron/kernel exploraveis.', example: 'linpeas' },
+            { cmd: 'chisel client <servidor>:<porta> R:<lport>:<alvo>:<rport>', what: 'Tunel/pivot TCP sobre HTTP.', why: 'Alcança redes internas atraves do host comprometido.', example: 'chisel client 10.0.0.9:8000 R:1080:socks' },
+            { cmd: 'evil-winrm -i <host> -u <user> -p <senha>', what: 'Shell interativo WinRM em host Windows.', why: 'Acesso pos-credencial em Windows.', example: 'evil-winrm -i 10.0.0.9 -u admin -p senha', note: 'Nao vem na imagem — adicione "evil-winrm" ao Dockerfile.sandbox e rebuild.' },
+          ]},
+          { cat: '📡 Serviços de rede (SMB/SNMP/etc.)', items: [
+            { cmd: 'crackmapexec smb <host> --shares', what: 'Lista compartilhamentos SMB (com ou sem credencial).', why: 'Shares abertos expoem arquivos e credenciais.', example: 'crackmapexec smb arcanum-internal -u svc -p Lab12345 --shares' },
+            { cmd: 'snmpwalk -v2c -c public <host>', what: 'Enumera via SNMP (community string).', why: 'SNMP "public" vaza interfaces, processos e as vezes senhas.', example: 'snmpwalk -v2c -c public host.docker.internal' },
+            { cmd: 'nmap -Pn -sV --script "smb-enum*,ssl-*,ssh-*" -p <portas> <host>', what: 'Enumeracao de servicos via scripts NSE.', why: 'SMB/SSL/SSH detalhados sem instalar nada extra.', example: 'nmap -Pn -sV --script "smb-enum-shares,ssl-cert" -p 139,445,443 host.docker.internal' },
+            { cmd: 'tshark -r <arquivo.pcap> -Y <filtro>', what: 'Analisa um pcap ja capturado.', why: 'Extrai credenciais/fluxos de uma captura (leitura funciona sem privilegio).', example: 'tshark -r captura.pcap -Y "http.request"', note: 'Captura ao vivo precisa de NET_RAW/root — no sandbox use -r sobre um pcap.' },
+            { cmd: 'enum4linux-ng -A <host>', what: 'Enumera SMB/compartilhamentos/usuarios (Windows/Samba).', why: 'Descoberta interna rica em um comando.', example: 'enum4linux-ng -A arcanum-internal', note: 'Nao vem na imagem — use crackmapexec smb, ou adicione "enum4linux-ng" e rebuild.' },
+          ]},
+          { cat: '🧰 Utilidades & diagnóstico', items: [
+            { cmd: 'curl -sSIL <url>', what: 'Mostra cabecalhos HTTP (seguindo redirecionamentos).', why: 'Inspeciona respostas, cookies e redirects.', example: 'curl -sSIL http://host.docker.internal:8080' },
+            { cmd: 'id; whoami; uname -a', what: 'Mostra usuario/privilegio/kernel do sandbox.', why: 'Confere o contexto de execucao atual.', example: 'id; whoami; uname -a' },
+            { cmd: 'cat /etc/os-release', what: 'Versao do SO do sandbox.', why: 'Saber a base da imagem Kali.', example: 'cat /etc/os-release' },
+            { cmd: 'nslookup <host>', what: 'Resolve um nome dentro do sandbox.', why: 'Confirma se o alvo (ex.: host.docker.internal) resolve.', example: 'nslookup host.docker.internal' },
+          ]},
+        ],
         activeTab: 'console',
         sessionTabs: ['console', 'graph', 'wiki', 'recon', 'web', 'network', 'creds', 'exploit', 'post', 'osint', 'findings'],
         expandedFinding: null,
@@ -4509,6 +4764,121 @@
             this.showToast(e.message, 'error');
             return null;
           }
+        },
+
+        async runConsole(cmd) {
+          const command = ((cmd ?? this.consoleInput) || '').trim();
+          if (!command || this.consoleRunning) return;
+          const entry = { command, running: true, stdout: '', stderr: '', exit_code: null,
+                          blocked: false, reason: '', action_class: '', duration: null, timed_out: false };
+          this.consoleHistory.push(entry);
+          this.consoleRunning = true;
+          this._consoleActive = entry;
+          this.$nextTick(() => this.scrollConsoleLog());
+          // Prefer live streaming over WebSocket; fall back to one-shot POST when the
+          // WS can't be opened (e.g. the server wasn't restarted for the new route).
+          const ws = await this.ensureConsoleWs();
+          if (ws) {
+            try {
+              ws.send(JSON.stringify({ type: 'exec', command,
+                session_id: this.currentSession?.name || this.currentSession?.id || null }));
+              return; // the stream handlers (handleConsoleWs) finalize the entry
+            } catch (e) { /* fall through to HTTP */ }
+          }
+          await this.runConsoleHttp(entry, command);
+        },
+        ensureConsoleWs() {
+          return new Promise((resolve) => {
+            if (this.consoleWs && this.consoleWsConnected && this.consoleWs.readyState === WebSocket.OPEN) {
+              resolve(this.consoleWs); return;
+            }
+            let base = this.wsBase;
+            if (!base || base.includes('localhost')) {
+              const proto = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
+              const host = (window.location.hostname === 'localhost' ? '127.0.0.1' : window.location.hostname) + ':' + (window.location.port || '8000');
+              base = proto + host; this.wsBase = base;
+            }
+            let url = base + '/api/console/stream';
+            if (window.ARCANUM_TOKEN) url += '?token=' + encodeURIComponent(window.ARCANUM_TOKEN);
+            let ws;
+            try { ws = new WebSocket(url); } catch (e) { resolve(null); return; }
+            let settled = false;
+            const done = (val) => { if (!settled) { settled = true; resolve(val); } };
+            const to = setTimeout(() => { try { ws.close(); } catch {} done(null); }, 4000);
+            ws.onopen = () => { this.consoleWs = ws; this.consoleWsConnected = true; clearTimeout(to); done(ws); };
+            ws.onmessage = (ev) => { try { this.handleConsoleWs(JSON.parse(ev.data)); } catch {} };
+            ws.onerror = () => { this.consoleWsConnected = false; clearTimeout(to); done(null); };
+            ws.onclose = () => {
+              this.consoleWsConnected = false; clearTimeout(to);
+              // Don't leave a mid-flight command spinning forever if the socket drops.
+              if (this._consoleActive && this._consoleActive.running) {
+                this._consoleActive.running = false;
+                if (!this._consoleActive.stderr) this._consoleActive.stderr = '[conexao encerrada antes do fim]';
+                if (this._consoleActive.exit_code === null) this._consoleActive.exit_code = -1;
+                this._consoleActive = null; this.consoleRunning = false;
+              }
+              done(null);
+            };
+          });
+        },
+        handleConsoleWs(msg) {
+          const e = this._consoleActive;
+          if (!e) return;
+          switch (msg.type) {
+            case 'start': e.action_class = msg.action_class || ''; break;
+            case 'chunk':
+              if (msg.stream === 'stderr') e.stderr += (msg.data || '');
+              else e.stdout += (msg.data || '');
+              this.$nextTick(() => this.scrollConsoleLog());
+              break;
+            case 'blocked': e.blocked = true; e.reason = msg.reason || 'Bloqueado pelo ROE.'; e.exit_code = -1; break;
+            case 'info': break; // another command is already running on this socket
+            case 'end':
+              e.running = false;
+              if (msg.error) e.stderr = (e.stderr ? e.stderr + '\n' : '') + msg.error;
+              if (msg.note) e.stderr = (e.stderr ? e.stderr + '\n' : '') + msg.note;
+              e.timed_out = !!msg.timed_out;
+              if (msg.cancelled) e.reason = e.reason || 'Cancelado pelo operador.';
+              if (typeof msg.exit_code !== 'undefined' && msg.exit_code !== null) e.exit_code = msg.exit_code;
+              else if (e.exit_code === null) e.exit_code = -1;
+              if (typeof msg.duration !== 'undefined') e.duration = msg.duration;
+              this._consoleActive = null;
+              this.consoleRunning = false;
+              this.$nextTick(() => this.scrollConsoleLog());
+              break;
+          }
+        },
+        cancelConsole() {
+          if (this.consoleWs && this.consoleWsConnected) {
+            try { this.consoleWs.send(JSON.stringify({ type: 'cancel' })); } catch {}
+          }
+        },
+        async runConsoleHttp(entry, command) {
+          const data = await this.apiFetch('/console/execute', {
+            method: 'POST',
+            body: JSON.stringify({ command, session_id: this.currentSession?.name || this.currentSession?.id || null }),
+          });
+          entry.running = false;
+          this._consoleActive = null;
+          this.consoleRunning = false;
+          if (!data) { entry.stderr = 'Falha na requisicao ao servidor.'; entry.exit_code = -1; }
+          else {
+            entry.action_class = data.action_class || '';
+            if (data.error) { entry.stderr = data.error; entry.exit_code = data.exit_code ?? -1; }
+            else if (data.blocked) { entry.blocked = true; entry.reason = data.reason || 'Bloqueado pelo ROE.'; entry.exit_code = -1; }
+            else { entry.stdout = data.stdout || ''; entry.stderr = data.stderr || '';
+                   entry.exit_code = data.exit_code; entry.duration = data.duration; }
+          }
+          this.$nextTick(() => this.scrollConsoleLog());
+        },
+        consoleInsert(cmd) { this.consoleInput = cmd; this.$nextTick(() => { const el = document.getElementById('console-input'); if (el) el.focus(); }); },
+        scrollConsoleLog() { const el = document.getElementById('console-log'); if (el) el.scrollTop = el.scrollHeight; },
+        consoleCatalogFiltered() {
+          const q = (this.consoleSearch || '').toLowerCase().trim();
+          if (!q) return this.consoleCatalog;
+          return this.consoleCatalog
+            .map(c => ({ cat: c.cat, items: c.items.filter(it => (it.cmd + ' ' + it.what + ' ' + it.why).toLowerCase().includes(q)) }))
+            .filter(c => c.items.length);
         },
 
         async fetchSessions() {

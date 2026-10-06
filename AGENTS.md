@@ -139,6 +139,16 @@
   caminho legítimo de "sem travas" para o lab do próprio operador — não existe modo que desligue ROE/audit/cleanup.
 - **Ofensivo (F1/F4/F5) só com alvo autorizado + ROE assinado.** Não implementar wrappers ofensivos
   sem lab autorizado próprio, Docker/sandbox ligados e decisão de HITL/modelo (ver ROADMAP §6/§11).
+- **Console direto do operador (sem LLM) continua governado.** `arcanum/api/routes/console.py` roda
+  comando cru escolhido pelo humano, mas **no mesmo trilho**: `_govern` (classify + ROE via
+  `EngagementManager.active_for`/`is_allowed`) decide, e **só o sandbox** executa — sem sandbox ⇒ recusa
+  honesta (nunca no host). Dois transportes compartilham `_govern` e auditam o desfecho
+  (`console_executed`/`blocked_by_roe`/`console_cancelled`): o **POST** `/api/console/execute` (one-shot) e
+  o **WS** `/api/console/stream` (ao vivo). O streaming usa `SandboxManager.execute_stream` (lê stdout/stderr
+  em chunks); timeout **mata** o processo (cliente + `pkill` no container) e, se o operador **cancelar** ou a
+  conexão cair, o `finally` do gerador encerra o processo — nada fica rodando no sandbox. O WS fica num
+  router **sem** a dependência de token HTTP e valida `?token=` dentro do handler (igual a `/ws/{session_id}`).
+  Ao mexer no console, **nunca** contornar `_govern`, o requisito de sandbox, nem a auditoria.
 
 ### Blue Team (F2 — `arcanum/blue/`)
 - **Toda ação defensiva real é registrada p/ rollback.** `DeploymentRegistry` (tabela
