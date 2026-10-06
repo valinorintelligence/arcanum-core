@@ -32,6 +32,15 @@ Arcanum Core is an open-source, autonomous security reconnaissance and penetrati
 
 **No API keys. No cloud. No content filtering. Everything runs locally.**
 
+> **📋 Current state & contributor docs:** the platform has grown well beyond the
+> figures below (now **100+ native audit tools** plus enterprise modules: CTEM,
+> CISA KEV, MITRE ATT&CK efficacy, Identity/AD, satellite probes, integrations,
+> an Eval harness and a headless browser agent). For the real runtime state,
+> architecture invariants and the audit roadmap, read [`AGENTS.md`](AGENTS.md)
+> and [`docs/MASTERPLAN.md`](docs/MASTERPLAN.md). The default local model is
+> **`qwen2.5-coder:7b`** (tuned for a hybrid fast/deep tier on modest GPUs), not
+> the larger models shown in some examples below.
+
 ```
 > arcanum autopilot example.com
 
@@ -317,12 +326,15 @@ arcanum sandbox build               # Build Docker sandbox image
 Environment variables (prefix `ARCANUM_`):
 
 ```bash
-# LLM
+# LLM (hybrid fast/deep tier — defaults tuned for a 7B local model)
 ARCANUM_OLLAMA_URL=http://localhost:11434
-ARCANUM_OLLAMA_MODEL=qwen3:32b
-ARCANUM_OLLAMA_NUM_CTX=131072
+ARCANUM_OLLAMA_MODEL=qwen2.5-coder:7b
+ARCANUM_OLLAMA_FAST_MODEL=qwen2.5-coder:7b     # tactical: recon/scan/tool calls
+ARCANUM_OLLAMA_DEEP_MODEL=qwen2.5-coder:7b     # strategic: exploit planning, summaries
+ARCANUM_OLLAMA_NUM_CTX=8192                     # raise if your VRAM/RAM allows
 ARCANUM_OLLAMA_TEMPERATURE=0.15
-ARCANUM_OLLAMA_ENABLE_THINKING=true
+ARCANUM_OLLAMA_ENABLE_THINKING=false
+ARCANUM_EMBED_MODEL=nomic-embed-text           # semantic recall (RAG); falls back to keyword
 
 # Sandbox
 ARCANUM_SANDBOX_IMAGE=arcanum-sandbox:latest

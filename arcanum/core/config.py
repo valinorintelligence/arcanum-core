@@ -57,16 +57,38 @@ class ArcanumConfig(BaseSettings):
 
     model_config = {"env_prefix": "ARCANUM_"}
 
-    # Ollama / LLM
+    # Ollama / LLM (Hybrid Tier Architecture)
     ollama_url: str = "http://localhost:11434"
-    ollama_model: str = "qwen3:32b"
-    ollama_timeout: float = 300.0
+    ollama_model: str = "qwen2.5-coder:7b"
+    ollama_fast_model: str = "qwen2.5-coder:7b"
+    ollama_deep_model: str = "qwen2.5-coder:7b"
+    ollama_fast_predict: int = 256
+    ollama_deep_predict: int = 1024
+    ollama_timeout: float = 600.0
     ollama_chunk_timeout: float = 180.0
-    ollama_num_ctx: int = 131072
+    ollama_num_ctx: int = 8192
     ollama_temperature: float = 0.15
-    ollama_num_predict: int = 32768
-    ollama_enable_thinking: bool = True
+    ollama_num_predict: int = 256
+    ollama_enable_thinking: bool = False
     ollama_repeat_penalty: float = 1.05
+    # How long Ollama keeps the model resident after the last request. "-1" pins
+    # it forever (lowest latency, but holds ~2.2GB VRAM + ~3.2GB RAM on a 4GB-GPU
+    # laptop even when idle). A finite value like "30m"/"10m" frees those
+    # resources when Arcanum is idle so the machine stays responsive for other
+    # work; the model reloads (a few seconds) on next use.
+    ollama_keep_alive: str = "30m"
+    # CPU threads for inference (passed as the per-request `num_thread` option —
+    # the OLLAMA_NUM_THREAD *server* env is ignored by Ollama).
+    #   0  (default) = AUTO: leave ~2 physical cores free for the OS/UI so the
+    #                  machine stays responsive during inference (laptop-friendly).
+    #   -1           = use all cores (max speed; can make a laptop unresponsive).
+    #   N  (>0)      = use exactly N threads.
+    # Resolve the effective value with effective_num_thread().
+    ollama_num_thread: int = 0
+    # Embedding model for semantic retrieval (RAG). Pull with:
+    #   ollama pull nomic-embed-text
+    # If unavailable, recall gracefully falls back to keyword (FTS) search.
+    embed_model: str = "nomic-embed-text"
 
     # Sandbox
     sandbox_image: str = "arcanum-sandbox:latest"
@@ -78,7 +100,72 @@ class ArcanumConfig(BaseSettings):
 
     # Web server
     web_port: int = 8000
-    web_host: str = "0.0.0.0"
+    # Bind to loopback by default. The API has no network-level isolation of
+    # its own; exposing it on 0.0.0.0 publishes an unauthenticated agent that
+    # can drive security tooling. For remote access put it behind a reverse
+    # proxy with TLS + auth and set api_token.
+    web_host: str = "127.0.0.1"
+    # Shared secret required by every API route and the WebSocket. If left
+    # empty a random token is generated per process at startup (printed once)
+    # and injected into the bundled frontend so the local UI works out of the
+    # box. Set a fixed value for remote/proxied deployments.
+    api_token: str = ""
+
+    # ROE signing secret (F0 #6). Engagements are signed with HMAC-SHA256 over this
+    # secret so a ROE cannot be forged or tampered without it (a plain content hash
+    # anyone could recompute). Empty => a random secret is generated once and
+    # persisted at ~/.arcanum/roe_secret.txt. Set a fixed value for multi-host setups.
+    roe_secret: str = ""
+    # When true, the engine only honors engagements whose HMAC signature verifies —
+    # legacy/unsigned engagements are NOT trusted. Default false keeps backward-compat
+    # (unsigned legacy engagements still work; a tampered/forged signature is always rejected).
+    require_signed_roe: bool = False
+
+    # Demo data is seeded only when this is true (never silently in prod).
+    seed_demo: bool = False
+
+    # Enterprise Integrations (Jira, ServiceNow, SIEM, Webhooks)
+    jira_url: str = ""
+    jira_email: str = ""
+    jira_api_token: str = ""
+    jira_project_key: str = "SEC"
+    jira_issue_type: str = "Vulnerability"
+
+    servicenow_instance: str = ""
+    servicenow_user: str = ""
+    servicenow_password: str = ""
+
+    splunk_hec_url: str = ""
+    splunk_hec_token: str = ""
+    datadog_api_key: str = ""
+    datadog_site: str = "datadoghq.com"
+    elastic_url: str = ""
+    elastic_api_key: str = ""
+
+    # Blue Team F2 (b) — real SIEM detection-rule deploy backends.
+    # Splunk management REST (:8089) for saved/correlation searches.
+    splunk_mgmt_url: str = ""          # e.g. https://splunk.internal:8089
+    splunk_mgmt_token: str = ""        # Bearer token (preferred)
+    splunk_username: str = ""          # or HTTP basic auth
+    splunk_password: str = ""
+    splunk_app: str = "search"         # app context for the saved search
+    # Microsoft Sentinel analytics rules via the ARM REST API.
+    sentinel_resource_id: str = ""     # ARM scope: /subscriptions/.../workspaces/<ws>
+    sentinel_token: str = ""           # Azure AD bearer token (operator-provided)
+    sentinel_api_version: str = "2023-11-01"
+
+    # Blue Team F2 (a) — real hardening apply over SSH (advanced opt-in; also read
+    # from ARCANUM_HARDENING_SSH_* env). Requires `paramiko` installed on the server.
+    hardening_ssh_target: str = ""     # host (or user@host)
+    hardening_ssh_user: str = ""
+    hardening_ssh_key: str = ""        # path to a private key
+    hardening_ssh_password: str = ""
+    hardening_ssh_port: int = 22
+
+    slack_webhook_url: str = ""
+    teams_webhook_url: str = ""
+    custom_webhook_url: str = ""
+    webhook_secret: str = ""
 
     # Agent
     max_context_tokens: int = 32000
@@ -108,6 +195,32 @@ class ArcanumConfig(BaseSettings):
     @property
     def workflows_dir(self) -> Path:
         return self.data_dir / "workflows"
+
+    def effective_num_thread(self) -> int:
+        """Resolve the CPU thread count to pass to Ollama (see ollama_num_thread).
+
+        Returns 0 to mean "don't cap" (Ollama uses all cores); a positive value
+        caps the threads. Default (config value 0) leaves ~2 physical cores free
+        so the machine stays responsive during local inference.
+        """
+        n = self.ollama_num_thread
+        if n and n > 0:
+            return n
+        if n == -1:
+            return 0  # explicit: use all cores
+        phys = None
+        try:
+            import psutil
+            phys = psutil.cpu_count(logical=False)
+        except Exception:
+            phys = None
+        if not phys:
+            # psutil missing: estimate physical cores from logical (assume 2-way
+            # SMT, true for modern Intel/AMD). os.cpu_count() is always available.
+            import os
+            logical = os.cpu_count() or 4
+            phys = max(1, logical // 2)
+        return max(1, phys - 2)
 
     def model_post_init(self, __context) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)

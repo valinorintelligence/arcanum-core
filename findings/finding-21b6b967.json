@@ -1,0 +1,24 @@
+{
+  "id": "finding-21b6b967",
+  "session_id": "op-regress",
+  "title": "Cabe\u00e7alho de Seguran\u00e7a Ausente: Strict-Transport-Security",
+  "type": "missing_security_header",
+  "severity": "medium",
+  "status": "confirmed",
+  "cvss_score": 5.0,
+  "affected": {
+    "target": "https://example.com",
+    "tool": "audit_security_headers"
+  },
+  "evidence": {
+    "header": "Strict-Transport-Security",
+    "description": "y",
+    "target": "https://example.com"
+  },
+  "poc": {
+    "description": "Detectado deterministicamente pela ferramenta de auditoria 'audit_security_headers'."
+  },
+  "remediation": "Configure HSTS",
+  "verified": true,
+  "created_at": "2026-10-04T16:11:10.504199+00:00"
+}

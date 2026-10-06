@@ -1,7 +1,7 @@
 """Tool management endpoints."""
 import json
 from pathlib import Path
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 
 router = APIRouter()
 
@@ -36,4 +36,4 @@ async def get_tool(tool_name: str):
     for tool in registry["tools"]:
         if tool["name"] == tool_name:
             return {"tool": tool}
-    return {"error": f"Tool '{tool_name}' not found"}, 404
+    raise HTTPException(404, f"Tool '{tool_name}' not found")

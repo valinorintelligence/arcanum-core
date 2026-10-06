@@ -44,13 +44,14 @@ dependencies = [
     "pydantic-settings>=2.0",
     "python-multipart",
     "pyyaml",
+    "psutil",
 ]
 
 [project.urls]
-Homepage = "https://github.com/valinorintelligence/foxnode-aspm"
-Repository = "https://github.com/valinorintelligence/foxnode-aspm"
-Issues = "https://github.com/valinorintelligence/foxnode-aspm/issues"
-Documentation = "https://github.com/valinorintelligence/foxnode-aspm#readme"
+Homepage = "https://github.com/valinorintelligence/arcanum-core"
+Repository = "https://github.com/valinorintelligence/arcanum-core"
+Issues = "https://github.com/valinorintelligence/arcanum-core/issues"
+Documentation = "https://github.com/valinorintelligence/arcanum-core#readme"
 
 [project.optional-dependencies]
 full = [
@@ -75,3 +76,9 @@ packages = ["arcanum"]
 
 [tool.ruff]
 line-length = 100
+
+[tool.pytest.ini_options]
+asyncio_mode = "strict"
+markers = [
+    "integration: tests that require Docker and the built sandbox image (deselect with -m 'not integration')",
+]

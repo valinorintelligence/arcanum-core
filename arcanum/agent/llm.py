@@ -15,12 +15,14 @@ class OllamaClient:
         self,
         base_url: str = "http://localhost:11434",
         model: str = "qwen3:32b",
-        timeout: float = 300.0,
-        num_ctx: int = 131072,
+        timeout: float = 600.0,
+        num_ctx: int = 8192,
         temperature: float = 0.15,
-        num_predict: int = 32768,
+        num_predict: int = 2048,
         repeat_penalty: float = 1.05,
-        enable_thinking: bool = True,
+        enable_thinking: bool = False,
+        keep_alive: str | int = "30m",
+        num_thread: int = 0,
     ):
         self.base_url = base_url.rstrip("/")
         self.model = model
@@ -29,29 +31,47 @@ class OllamaClient:
         self.num_predict = num_predict
         self.repeat_penalty = repeat_penalty
         self.enable_thinking = enable_thinking
+        # How long Ollama keeps the model loaded after the last call. "-1" pins it
+        # forever; a finite value ("30m") frees VRAM/RAM when idle (laptop-friendly).
+        self.keep_alive = keep_alive
+        # CPU threads per request (0 = Ollama default/all cores). Set < core count
+        # to keep the machine responsive during inference.
+        self.num_thread = num_thread
         self._client = httpx.AsyncClient(base_url=self.base_url, timeout=timeout)
 
     async def chat(
         self,
         messages: list[dict],
         tools: list[dict] | None = None,
+        fmt: str | None = None,
+        num_predict: int | None = None,
     ) -> dict:
-        """Send a chat completion request to Ollama. Returns the response message."""
+        """Send a chat completion request to Ollama. Returns the response message.
+
+        ``fmt="json"`` constrains the model to emit valid JSON. For weak local
+        models (e.g. qwen2.5-coder:7b) this is what makes them emit a compact
+        tool call instead of a long free-text tutorial — ~5x faster per turn
+        and far more reliable (measured). Narration to the operator is produced
+        separately by the engine (deterministic pt-BR), so no UX is lost.
+        """
         payload: dict = {
             "model": self.model,
             "messages": messages,
             "stream": False,
+            "think": self.enable_thinking,
+            "keep_alive": self.keep_alive,
             "options": {
                 "num_ctx": self.num_ctx,
                 "temperature": self.temperature,
-                "num_predict": self.num_predict,
+                "num_predict": num_predict if num_predict is not None else self.num_predict,
                 "repeat_penalty": self.repeat_penalty,
+                **({"num_thread": self.num_thread} if self.num_thread else {}),
             },
         }
         if tools:
             payload["tools"] = tools
-        if self.enable_thinking:
-            payload["options"]["num_predict"] = max(self.num_predict, 16384)
+        if fmt:
+            payload["format"] = fmt
 
         resp = await self._client.post("/api/chat", json=payload)
         resp.raise_for_status()
@@ -68,11 +88,14 @@ class OllamaClient:
             "model": self.model,
             "messages": messages,
             "stream": True,
+            "think": self.enable_thinking,
+            "keep_alive": self.keep_alive,
             "options": {
                 "num_ctx": self.num_ctx,
                 "temperature": self.temperature,
                 "num_predict": self.num_predict,
                 "repeat_penalty": self.repeat_penalty,
+                **({"num_thread": self.num_thread} if self.num_thread else {}),
             },
         }
         if tools:

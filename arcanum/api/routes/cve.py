@@ -1,5 +1,5 @@
 """CVE Knowledge Base endpoints."""
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 
 router = APIRouter()
 
@@ -31,7 +31,7 @@ async def cve_stats(request: Request):
 async def get_cve(request: Request, cve_id: str):
     entry = await request.app.state.cve_kb.get(cve_id)
     if not entry:
-        return {"error": "CVE not found"}, 404
+        raise HTTPException(404, "CVE not found")
     return {
         "cve": {
             "id": entry.id,

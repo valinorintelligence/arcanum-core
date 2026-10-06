@@ -23,7 +23,7 @@ class ExecutionResult:
 class SandboxManager:
     """Manages Docker containers for sandboxed security tool execution."""
 
-    DEFAULT_IMAGE = "arcanum/kali-sandbox:latest"
+    DEFAULT_IMAGE = "arcanum-sandbox:latest"
     DEFAULT_TIMEOUT = 300
     MEMORY_LIMIT = "4g"
 
@@ -51,6 +51,36 @@ class SandboxManager:
         await proc.wait()
         return proc.returncode == 0
 
+    async def prune_orphans(self) -> int:
+        """Find and remove stopped or exited arcanum-sandbox-* containers.
+
+        Returns:
+            Number of containers pruned.
+        """
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "docker", "ps", "-a",
+                "--filter", "name=arcanum-sandbox-",
+                "--filter", "status=exited",
+                "-q",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await proc.communicate()
+            if proc.returncode == 0 and stdout:
+                cids = [cid.strip() for cid in stdout.decode().splitlines() if cid.strip()]
+                if cids:
+                    rm_proc = await asyncio.create_subprocess_exec(
+                        "docker", "rm", "-f", *cids,
+                        stdout=asyncio.subprocess.DEVNULL,
+                        stderr=asyncio.subprocess.DEVNULL,
+                    )
+                    await rm_proc.wait()
+                    return len(cids)
+        except Exception:
+            pass
+        return 0
+
     async def create_container(
         self,
         workspace_dir: Path,
@@ -68,11 +98,26 @@ class SandboxManager:
         container_name = f"arcanum-sandbox-{uuid.uuid4().hex[:12]}"
         workspace_abs = str(workspace_dir.resolve())
 
+        # Defense-in-depth: non-root, all caps dropped, no privilege escalation,
+        # and resource limits. Validated that `nmap -sT -sV` (connect scan +
+        # service detection) works fine under this profile — raw-socket SYN
+        # scans are intentionally not supported here (would need root/ambient
+        # caps). See _auto_repair_command which downgrades -sS -> -sT.
         cmd = [
             "docker", "run", "-d",
             "--name", container_name,
-            "--memory", self.MEMORY_LIMIT,
+            "--user", "nobody",
+            "--cap-drop=ALL",
             "--security-opt", "no-new-privileges",
+            "--memory", self.MEMORY_LIMIT,
+            "--memory-swap", self.MEMORY_LIMIT,  # disallow swap growth
+            "--pids-limit", "512",
+            "--cpus", "2",
+            "-e", "HOME=/tmp",
+            "-e", "XDG_CONFIG_HOME=/tmp/.config",
+            "-e", "XDG_DATA_HOME=/tmp/.local/share",
+            "-e", "XDG_CACHE_HOME=/tmp/.cache",
+            "-w", "/workspace",
             "-v", f"{workspace_abs}:/workspace",
         ]
 
@@ -132,6 +177,18 @@ class SandboxManager:
         except asyncio.TimeoutError:
             proc.kill()
             await proc.wait()
+            # Clean up the orphaned process inside the container
+            try:
+                base_cmd = command.strip().split()[0] if command.strip() else ""
+                if base_cmd:
+                    kill_proc = await asyncio.create_subprocess_exec(
+                        "docker", "exec", container_id, "pkill", "-f", base_cmd,
+                        stdout=asyncio.subprocess.DEVNULL,
+                        stderr=asyncio.subprocess.DEVNULL,
+                    )
+                    await kill_proc.wait()
+            except Exception:
+                pass
             duration = time.time() - start
             return ExecutionResult(
                 command=command,
@@ -149,6 +206,126 @@ class SandboxManager:
             stderr=stderr.decode(errors="replace"),
             duration=duration,
         )
+
+    async def _kill_exec(self, proc, container_id: str, command: str) -> None:
+        """Kill a running ``docker exec`` client AND the process it spawned inside
+        the container. Killing only the client leaves the in-container tool running
+        (docker does not propagate the signal), so we also ``pkill`` by base name —
+        the same cleanup the blocking ``execute`` timeout path uses."""
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        try:
+            base_cmd = command.strip().split()[0] if command.strip() else ""
+            if base_cmd:
+                kp = await asyncio.create_subprocess_exec(
+                    "docker", "exec", container_id, "pkill", "-f", base_cmd,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                await kp.wait()
+        except Exception:
+            pass
+        try:
+            await proc.wait()
+        except Exception:
+            pass
+
+    async def execute_stream(
+        self,
+        container_id: str,
+        command: str,
+        timeout: int | None = None,
+    ):
+        """Execute a command and yield its output incrementally as it is produced.
+
+        This is the streaming counterpart of :meth:`execute`: instead of blocking
+        on ``communicate()`` until the process exits, it reads stdout/stderr in
+        chunks and yields them live, so the operator can watch a long scan (nmap,
+        nuclei, ffuf) progress in real time over a WebSocket.
+
+        Yields dicts, in order:
+          * ``{"stream": "stdout"|"stderr", "data": <text chunk>}`` — zero or more,
+          * exactly one terminal ``{"stream": "exit", "exit_code": int,
+            "duration": float[, "timed_out": True, "note": str]}``.
+
+        On timeout the process is killed (client + in-container) and a terminal
+        ``exit`` with ``timed_out=True`` is emitted. If the consumer stops early
+        (``aclose``/cancellation), the ``finally`` block kills any still-running
+        process so nothing is left executing in the sandbox.
+        """
+        effective_timeout = timeout if timeout is not None else self.timeout
+        start = time.time()
+        proc = await asyncio.create_subprocess_exec(
+            "docker", "exec", container_id, "sh", "-c", command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        queue: asyncio.Queue = asyncio.Queue()
+
+        async def _pump(stream, name: str) -> None:
+            try:
+                while True:
+                    chunk = await stream.read(4096)
+                    if not chunk:
+                        break
+                    await queue.put((name, chunk.decode(errors="replace")))
+            except Exception:
+                pass
+            finally:
+                await queue.put((name, None))  # sentinel: this stream closed
+
+        pumps = [
+            asyncio.create_task(_pump(proc.stdout, "stdout")),
+            asyncio.create_task(_pump(proc.stderr, "stderr")),
+        ]
+        ended = 0
+        timed_out = False
+        deadline = (start + effective_timeout) if effective_timeout and effective_timeout > 0 else None
+
+        try:
+            while ended < 2:
+                remaining = None
+                if deadline is not None:
+                    remaining = deadline - time.time()
+                    if remaining <= 0:
+                        timed_out = True
+                        break
+                try:
+                    name, data = await asyncio.wait_for(queue.get(), timeout=remaining)
+                except asyncio.TimeoutError:
+                    timed_out = True
+                    break
+                if data is None:
+                    ended += 1
+                    continue
+                yield {"stream": name, "data": data}
+
+            if timed_out:
+                await self._kill_exec(proc, container_id, command)
+                yield {
+                    "stream": "exit", "exit_code": -1, "timed_out": True,
+                    "duration": round(time.time() - start, 2),
+                    "note": f"Tempo limite de {effective_timeout}s excedido — processo encerrado.",
+                }
+            else:
+                try:
+                    await proc.wait()
+                except Exception:
+                    pass
+                yield {
+                    "stream": "exit", "exit_code": proc.returncode or 0,
+                    "duration": round(time.time() - start, 2),
+                }
+        finally:
+            for t in pumps:
+                t.cancel()
+            # If the consumer abandoned us mid-stream (cancel/disconnect), make sure
+            # nothing keeps running inside the sandbox.
+            if proc.returncode is None:
+                await self._kill_exec(proc, container_id, command)
 
     async def stop_container(self, container_id: str) -> None:
         """Stop a running container.

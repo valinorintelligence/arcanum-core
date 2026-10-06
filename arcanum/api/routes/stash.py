@@ -1,12 +1,22 @@
 """Stash endpoints."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from ...core.models import StashType
 
 router = APIRouter()
+
+
+def _mask(value: str) -> str:
+    """Mask a sensitive value for list views: reveal only a short prefix."""
+    if value is None:
+        return ""
+    v = str(value)
+    if len(v) <= 4:
+        return "*" * len(v)
+    return v[:4] + "…" + "*" * min(8, max(0, len(v) - 4))
 
 
 class AddStashRequest(BaseModel):
@@ -17,7 +27,9 @@ class AddStashRequest(BaseModel):
 
 
 @router.get("/")
-async def list_stash(request: Request, type: str = None):
+async def list_stash(request: Request, type: str = None, reveal: bool = False):
+    """List stash items. Values are masked by default; pass reveal=true to get
+    full values (still requires a valid API token)."""
     filter_type = StashType(type) if type else None
     items = await request.app.state.stash_mgr.list(filter_type)
     return {
@@ -25,7 +37,8 @@ async def list_stash(request: Request, type: str = None):
             {
                 "id": i.id,
                 "type": i.type if isinstance(i.type, str) else i.type.value,
-                "value": i.value,
+                "value": i.value if reveal else _mask(i.value),
+                "masked": not reveal,
                 "note": i.note,
                 "created_at": str(i.created_at),
             }
@@ -53,7 +66,7 @@ async def add_stash(request: Request, body: AddStashRequest):
 async def get_stash(request: Request, item_id: str):
     item = await request.app.state.stash_mgr.get(item_id)
     if not item:
-        return {"error": "Not found"}, 404
+        raise HTTPException(404, "Not found")
     return {
         "item": {
             "id": item.id,
@@ -68,7 +81,7 @@ async def get_stash(request: Request, item_id: str):
 async def pull_stash(request: Request, item_id: str, session_id: str):
     item = await request.app.state.stash_mgr.pull(item_id, session_id)
     if not item:
-        return {"error": "Not found"}, 404
+        raise HTTPException(404, "Not found")
     return {"status": "pulled", "item_id": item_id}
 
 

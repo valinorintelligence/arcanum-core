@@ -165,6 +165,10 @@ class ArcanumApp(App):
         log.write(f"Mode: [bold]{self.current_mode.upper()}[/]")
         if self.target:
             log.write(f"Target: [bold cyan]{self.target}[/]")
+        log.write("[yellow]⚠ TUI EXPERIMENTAL:[/] esta interface de terminal ainda não está conectada "
+                  "ao motor do agente.")
+        log.write("[yellow]  Use a interface web (o produto):[/] [bold]arcanum serve[/] → http://localhost:8000")
+        log.write("  Os comandos de dados do CLI funcionam: [dim]arcanum ops/stash/cve ...[/]")
         log.write("Type a command or question below. Press F1 for help.")
         log.write("")
 
@@ -203,8 +207,8 @@ class ArcanumApp(App):
             except Exception as e:
                 log.write(f"[red]Error: {e}[/]")
         else:
-            log.write("[yellow]Agent engine not connected. Ensure Ollama is running.[/]")
-            log.write(f"[dim]Would process: '{user_input}' in {self.current_mode} mode[/]")
+            log.write("[yellow]Esta TUI é experimental e não executa o agente.[/] "
+                      "Use a interface web: [bold]arcanum serve[/] → http://localhost:8000")
 
     def _handle_event(self, event: dict, log: OutputLog):
         etype = event.get("type", "")

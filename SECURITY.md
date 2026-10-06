@@ -46,12 +46,30 @@ Arcanum Core is a security testing tool. Users are responsible for:
 
 ## Sandbox Security
 
-The Docker sandbox is designed with defense-in-depth:
+The Docker sandbox is designed with defense-in-depth. Containers are launched
+(see `arcanum/sandbox/docker.py`) with:
 
-- Runs as non-root user (`nobody`)
-- Memory limited to 4GB
-- `no-new-privileges` security option
-- Optional network isolation
+- Non-root user (`--user nobody`)
+- All Linux capabilities dropped (`--cap-drop=ALL`)
+- No privilege escalation (`--security-opt no-new-privileges`)
+- Memory limited to 4GB with swap disabled, plus `--pids-limit` and `--cpus`
 - No privileged mode
+- Optional network isolation (`network=False` → `--network none`)
+
+Because the sandbox is unprivileged, `nmap` uses a TCP connect scan (`-sT`,
+auto-applied) rather than a raw-socket SYN scan. If the sandbox image is
+unavailable, command execution is refused rather than run on the host.
 
 Report any sandbox escape vectors as critical vulnerabilities.
+
+## Web UI / API Security
+
+- The server binds to `127.0.0.1` by default. Only expose it on `0.0.0.0`
+  behind a TLS-terminating reverse proxy with its own authentication.
+- Every API route and the WebSocket require a token. Set `ARCANUM_API_TOKEN`
+  for a stable secret; if unset, an ephemeral per-process token is generated
+  and injected into the bundled UI (printed to the log for external clients).
+- CORS defaults to loopback origins; override with `ARCANUM_CORS_ORIGINS`.
+- Stash values are masked in list views; request full values explicitly.
+- Reports are rendered with HTML auto-escaping to prevent stored XSS from
+  target-derived content.

@@ -46,11 +46,17 @@ class AlertEngine:
         AlertRule("xss_confirmed", r"(?:XSS|cross.?site.?scripting).*(?:confirmed|reflected|stored)", AlertPriority.HIGH, "XSS vulnerability confirmed"),
     ]
 
+    MAX_ALERTS = 500  # cap retained alerts to avoid unbounded memory growth
+
     def __init__(self):
         self.rules: list[AlertRule] = list(self.DEFAULT_RULES)
         self.alerts: list[Alert] = []
         self._handlers: list[Callable[[Alert], Awaitable[None]]] = []
         self._alert_counter = 0
+
+    def _retain(self) -> None:
+        if len(self.alerts) > self.MAX_ALERTS:
+            self.alerts = self.alerts[-self.MAX_ALERTS:]
 
     def on_alert(self, handler: Callable[[Alert], Awaitable[None]]):
         self._handlers.append(handler)
@@ -68,6 +74,7 @@ class AlertEngine:
                     source=source,
                 )
                 self.alerts.append(alert)
+                self._retain()
                 new_alerts.append(alert)
                 for handler in self._handlers:
                     await handler(alert)
@@ -86,6 +93,7 @@ class AlertEngine:
                 finding_id=finding_data.get("id"),
             )
             self.alerts.append(alert)
+            self._retain()
             for handler in self._handlers:
                 await handler(alert)
             return [alert]
