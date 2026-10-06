@@ -19,7 +19,7 @@ from ..core.demo_data import seed_all_demo_data
 from ..agent.llm import OllamaClient
 from ..agent.session import SessionManager
 
-from .routes import sessions, tools, findings, stash, cve, reports, integrations, ctem, probes, identity, browser, mitre, redteam, blue, purple, console
+from .routes import sessions, tools, findings, stash, cve, reports, integrations, ctem, probes, identity, browser, mitre, redteam, blue, purple, console, campaigns
 from .routes import eval as eval_router
 from .websocket import router as ws_router
 
@@ -306,9 +306,11 @@ def create_app() -> FastAPI:
     app.include_router(blue.router, dependencies=auth)
     app.include_router(purple.router, dependencies=auth)
     app.include_router(console.router, dependencies=auth)
+    app.include_router(campaigns.router, dependencies=auth)
     # Console live-stream WebSocket: no HTTP auth dep (browsers can't set headers on
     # a WS upgrade); it validates the ?token= query param inside the handler.
     app.include_router(console.stream_router)
+    app.include_router(campaigns.stream_router)
     app.include_router(ws_router)
 
     # Health check

@@ -311,6 +311,25 @@ CREATE TABLE IF NOT EXISTS purple_results (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_purple_results_campaign ON purple_results(campaign_id);
+
+-- Adaptive campaign runs (Phase 2): the operator-driven, governed campaign engine.
+-- One row per run: what ran, against what, the adaptive context it accumulated, and
+-- the per-step log. Read-only history surface; execution still goes through the
+-- governed console/sandbox path (classify + ROE + audit), never from this table.
+CREATE TABLE IF NOT EXISTS campaign_runs (
+    id TEXT PRIMARY KEY,
+    session_id TEXT,
+    engagement_id TEXT,
+    campaign TEXT,
+    target TEXT,
+    status TEXT DEFAULT 'running',   -- running | completed | paused_roe | cancelled | error
+    context TEXT,                    -- JSON (accumulated adaptive context)
+    steps_log TEXT,                  -- JSON (per-step results)
+    findings_count INTEGER DEFAULT 0,
+    started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    ended_at DATETIME
+);
+CREATE INDEX IF NOT EXISTS idx_campaign_runs_session ON campaign_runs(session_id);
 """
 
 

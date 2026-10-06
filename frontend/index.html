@@ -684,7 +684,7 @@
       </div>
 
       <!-- Alvo / Programa (escopo ROE) + Campanhas guiadas (Fase 1) -->
-      <div class="bg-surface-900 border border-gray-800 rounded-xl p-3 space-y-3" x-init="fetchActiveEngagement()">
+      <div class="bg-surface-900 border border-gray-800 rounded-xl p-3 space-y-3" x-init="fetchActiveEngagement(); fetchCampaignCatalog()">
         <div class="flex items-center justify-between flex-wrap gap-2">
           <div class="text-xs">
             <template x-if="activeEngagement">
@@ -703,8 +703,35 @@
           </div>
         </div>
 
+        <div x-show="adaptiveCampaigns.length">
+          <div class="text-[11px] font-semibold text-cyan-300 mb-1">🧠 Campanhas inteligentes (adaptativas) — decidem sozinhas os próximos passos pelo que acharem, e criam findings automáticos</div>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <template x-for="camp in adaptiveCampaigns" :key="camp.key">
+              <button @click="runAdaptiveCampaign(camp.key)" :disabled="adaptiveRunning || campaignRunning || consoleRunning" class="text-left bg-gradient-to-br from-cyan-900/30 to-gray-800/60 border border-cyan-800/60 hover:border-cyan-600 rounded-lg p-2 disabled:opacity-50 transition-colors">
+                <div class="flex items-center gap-1.5">
+                  <span x-text="camp.icon"></span>
+                  <span class="text-xs font-semibold text-gray-100" x-text="camp.title"></span>
+                  <span class="ml-auto text-[9px] px-1 rounded" :class="camp.risk==='intrusivo' ? 'bg-amber-900/60 text-amber-300' : 'bg-emerald-900/60 text-emerald-300'" x-text="camp.risk"></span>
+                </div>
+                <div class="text-[11px] text-gray-400 mt-0.5" x-text="camp.desc"></div>
+                <div class="text-[10px] text-gray-600 mt-0.5"><span x-text="camp.steps.length"></span> passos possíveis · adapta pelo resultado</div>
+              </button>
+            </template>
+          </div>
+          <template x-if="adaptiveRunning || adaptiveState.status">
+            <div class="flex items-center gap-2 text-xs bg-surface-950 border border-cyan-800/50 rounded-lg p-2 mt-2">
+              <span x-show="adaptiveRunning" class="text-cyan-300 animate-pulse">🧠</span>
+              <div class="flex-1">
+                <div class="text-gray-300"><b x-text="adaptiveState.name"></b> — <span x-text="adaptiveState.status"></span> · alvo <span x-text="adaptiveState.target"></span></div>
+                <div class="text-[10px] text-gray-500"><span x-text="adaptiveState.findings"></span> finding(s) criado(s) nesta campanha</div>
+              </div>
+              <button x-show="adaptiveRunning" @click="cancelAdaptiveCampaign()" class="text-[11px] px-2 py-1 rounded bg-red-700 hover:bg-red-600 text-white">Parar</button>
+            </div>
+          </template>
+        </div>
+
         <div>
-          <div class="text-[11px] font-semibold text-gray-400 mb-1">Campanhas guiadas — um clique roda a sequência (cada passo é governado e aparece ao vivo)</div>
+          <div class="text-[11px] font-semibold text-gray-400 mb-1">Campanhas guiadas (simples) — sequência fixa; cada passo é governado e aparece ao vivo</div>
           <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
             <template x-for="camp in campaigns" :key="camp.title">
               <button @click="runCampaign(camp)" :disabled="campaignRunning || consoleRunning" class="text-left bg-gray-800/60 border border-gray-800 hover:border-cyan-700 rounded-lg p-2 disabled:opacity-50 transition-colors">
@@ -3263,6 +3290,12 @@
         campaignCancel: false,
         campaignState: { name: '', total: 0, done: 0, current: '', paused: '' },
         campaignConfirm: { show: false, title: '', why: '', command: '', _resolve: null },
+        // ===== Campanhas inteligentes (adaptativas) — Fase 2, backend governado via WS =====
+        adaptiveCampaigns: [],
+        campaignWs: null,
+        campaignWsConnected: false,
+        adaptiveRunning: false,
+        adaptiveState: { name: '', target: '', findings: 0, status: '', runId: '' },
         // {host}=domínio/host sem esquema nem porta · {base}=host:porta · {url}=http(s)://...
         campaigns: [
           { icon: '🗺️', title: 'Mapear o alvo', risk: 'seguro', desc: 'Descobre subdomínios, hosts vivos, tecnologias e rotas. Só observa.', steps: [
@@ -5125,6 +5158,108 @@
           this.campaignRunning = false;
         },
         cancelCampaign() { this.campaignCancel = true; this.cancelConsole(); },
+
+        // ===== Campanhas inteligentes (adaptativas) — Fase 2 =====
+        async fetchCampaignCatalog() {
+          const data = await this.apiFetch('/campaigns/catalog');
+          this.adaptiveCampaigns = (data && data.campaigns) ? data.campaigns : [];
+        },
+        ensureCampaignWs() {
+          return new Promise((resolve) => {
+            if (this.campaignWs && this.campaignWsConnected && this.campaignWs.readyState === WebSocket.OPEN) { resolve(this.campaignWs); return; }
+            let base = this.wsBase;
+            if (!base || base.includes('localhost')) {
+              const proto = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
+              const host = (window.location.hostname === 'localhost' ? '127.0.0.1' : window.location.hostname) + ':' + (window.location.port || '8000');
+              base = proto + host; this.wsBase = base;
+            }
+            let url = base + '/api/campaigns/stream';
+            if (window.ARCANUM_TOKEN) url += '?token=' + encodeURIComponent(window.ARCANUM_TOKEN);
+            let ws; try { ws = new WebSocket(url); } catch (e) { resolve(null); return; }
+            let settled = false; const done = (v) => { if (!settled) { settled = true; resolve(v); } };
+            const to = setTimeout(() => { try { ws.close(); } catch {} done(null); }, 4000);
+            ws.onopen = () => { this.campaignWs = ws; this.campaignWsConnected = true; clearTimeout(to); done(ws); };
+            ws.onmessage = (ev) => { try { this.handleCampaignWs(JSON.parse(ev.data)); } catch {} };
+            ws.onerror = () => { this.campaignWsConnected = false; clearTimeout(to); done(null); };
+            ws.onclose = () => {
+              this.campaignWsConnected = false; clearTimeout(to);
+              if (this.adaptiveRunning) { this.adaptiveRunning = false; if (this._consoleActive) { this._consoleActive.running = false; this._consoleActive = null; } }
+              done(null);
+            };
+          });
+        },
+        async runAdaptiveCampaign(key) {
+          if (this.adaptiveRunning || this.consoleRunning || this.campaignRunning) return;
+          await this.fetchActiveEngagement();
+          const target = this.campaignTarget();
+          if (!target) { this.consoleHistory.push({ command: '# campanha inteligente: ' + key, running: false, stdout: '', stderr: 'Defina o alvo/programa primeiro (botão 🎯).', exit_code: -1, blocked: false }); this.$nextTick(() => this.scrollConsoleLog()); return; }
+          const ws = await this.ensureCampaignWs();
+          if (!ws) { this.consoleHistory.push({ command: '# campanha inteligente', running: false, stdout: '', stderr: 'WebSocket de campanha indisponível (o servidor foi reiniciado para a nova rota?). Use as campanhas simples ou o console.', exit_code: -1, blocked: false }); this.$nextTick(() => this.scrollConsoleLog()); return; }
+          this.adaptiveRunning = true;
+          this.adaptiveState = { name: key, target, findings: 0, status: 'iniciando', runId: '' };
+          try { ws.send(JSON.stringify({ type: 'run', campaign: key, target, session_id: this.currentSession?.name || this.currentSession?.id || null })); }
+          catch (e) { this.adaptiveRunning = false; }
+        },
+        handleCampaignWs(msg) {
+          switch (msg.type) {
+            case 'run_id': this.adaptiveState.runId = msg.run_id; break;
+            case 'campaign_start':
+              this.adaptiveState.name = msg.title || msg.campaign; this.adaptiveState.status = 'rodando';
+              this.consoleHistory.push({ command: '# 🧠 ' + (msg.title || msg.campaign) + ' → ' + msg.target + ' (' + msg.steps + ' passos)', running: false, stdout: '', stderr: '', exit_code: 0, blocked: false, note: true });
+              this.$nextTick(() => this.scrollConsoleLog());
+              break;
+            case 'step_start': {
+              const e = { command: msg.command, running: true, stdout: '', stderr: '', exit_code: null, blocked: false, reason: '', action_class: msg.action_class || '', duration: null, timed_out: false };
+              this.consoleHistory.push(e); this._consoleActive = e; this.$nextTick(() => this.scrollConsoleLog());
+              break; }
+            case 'chunk': {
+              const e = this._consoleActive; if (!e) break;
+              if (msg.stream === 'stderr') e.stderr += (msg.data || ''); else e.stdout += (msg.data || '');
+              this.$nextTick(() => this.scrollConsoleLog());
+              break; }
+            case 'step_blocked': {
+              const e = this._consoleActive || { command: msg.command, running: false, stdout: '', stderr: '', exit_code: -1, action_class: msg.action_class || '' };
+              e.blocked = true; e.reason = msg.reason || 'Bloqueado pelo ROE.'; e.running = false; e.exit_code = -1;
+              if (!this._consoleActive) this.consoleHistory.push(e);
+              this._consoleActive = null; this.$nextTick(() => this.scrollConsoleLog());
+              break; }
+            case 'step_end': {
+              const e = this._consoleActive;
+              if (e) { e.running = false; if (typeof msg.exit_code !== 'undefined' && msg.exit_code !== null) e.exit_code = msg.exit_code; else if (e.exit_code === null) e.exit_code = 0; if (typeof msg.duration !== 'undefined') e.duration = msg.duration; }
+              this._consoleActive = null; this.$nextTick(() => this.scrollConsoleLog());
+              break; }
+            case 'step_skip':
+              this.consoleHistory.push({ command: '# pulado: ' + (msg.title || msg.id), running: false, stdout: '', stderr: '(' + (msg.reason || 'passo pulado') + ')', exit_code: 0, blocked: false, note: true });
+              this.$nextTick(() => this.scrollConsoleLog());
+              break;
+            case 'finding':
+              this.adaptiveState.findings += 1;
+              this.consoleHistory.push({ command: '✓ finding: ' + ((msg.finding && msg.finding.title) || '') + ' [' + ((msg.finding && msg.finding.severity) || '') + ']', running: false, stdout: '', stderr: '', exit_code: 0, blocked: false, note: true });
+              this.$nextTick(() => this.scrollConsoleLog());
+              break;
+            case 'approval_required':
+              this.campaignConfirm = { show: true, title: msg.title || 'Passo intrusivo', why: msg.why || '', command: msg.command || '',
+                _resolve: (ok) => { try { this.campaignWs.send(JSON.stringify({ type: ok ? 'approve' : 'skip' })); } catch (e) {} } };
+              break;
+            case 'campaign_end': {
+              this.adaptiveRunning = false;
+              this.adaptiveState.status = msg.status || 'concluída';
+              const tail = msg.status === 'paused_roe' ? ('⛔ pausada: ' + (msg.reason || 'bloqueio de ROE')) : (msg.status === 'cancelled' ? 'cancelada' : (msg.status === 'error' ? ('erro: ' + (msg.reason || '')) : 'concluída ✓'));
+              this.consoleHistory.push({ command: '# campanha ' + tail + ' — ' + this.adaptiveState.findings + ' finding(s)', running: false, stdout: '', stderr: '', exit_code: msg.status === 'completed' ? 0 : -1, blocked: msg.status === 'paused_roe', reason: msg.reason || '', note: true });
+              if (this.fetchFindings) this.fetchFindings();
+              this.$nextTick(() => this.scrollConsoleLog());
+              break; }
+            case 'error':
+              this.adaptiveRunning = false;
+              this.consoleHistory.push({ command: '# campanha inteligente', running: false, stdout: '', stderr: msg.content || 'erro', exit_code: -1, blocked: false });
+              this.$nextTick(() => this.scrollConsoleLog());
+              break;
+            case 'info': this.showToast(msg.content || '', 'info'); break;
+          }
+        },
+        cancelAdaptiveCampaign() {
+          try { if (this.campaignWs && this.campaignWsConnected) this.campaignWs.send(JSON.stringify({ type: 'cancel' })); } catch (e) {}
+        },
 
         async fetchSessions() {
           const data = await this.apiFetch('/sessions');
