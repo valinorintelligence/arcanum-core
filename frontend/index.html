@@ -683,6 +683,56 @@
         <button @click="currentSession ? (currentView='session') : (currentView='dashboard')" title="Voltar" class="text-gray-500 hover:text-gray-300 text-xs">← Voltar</button>
       </div>
 
+      <!-- Alvo / Programa (escopo ROE) + Campanhas guiadas (Fase 1) -->
+      <div class="bg-surface-900 border border-gray-800 rounded-xl p-3 space-y-3" x-init="fetchActiveEngagement()">
+        <div class="flex items-center justify-between flex-wrap gap-2">
+          <div class="text-xs">
+            <template x-if="activeEngagement">
+              <span class="text-gray-300">🎯 <b x-text="activeEngagement.name"></b>
+                <span class="text-gray-500">· escopo: <span x-text="(activeEngagement.scope||[]).join(', ')"></span></span>
+                <span class="ml-1 px-1 rounded text-[10px]" :class="activeEngagement.auto_approve ? 'bg-emerald-900/60 text-emerald-300' : 'bg-amber-900/60 text-amber-300'" x-text="activeEngagement.auto_approve ? 'lab — tudo automático' : 'externo — passo intrusivo pede confirmação'"></span>
+              </span>
+            </template>
+            <template x-if="!activeEngagement">
+              <span class="text-gray-500">Nenhum alvo/programa com escopo definido — sem isso não há trava de escopo (ROE).</span>
+            </template>
+          </div>
+          <div class="flex gap-2">
+            <button @click="openTargetSetup('bugbounty')" class="text-[11px] px-2 py-1 rounded bg-cyan-700 hover:bg-cyan-600 text-white">🎯 Definir alvo / programa</button>
+            <button @click="fetchActiveEngagement()" title="Atualizar" class="text-[11px] px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-200">↻</button>
+          </div>
+        </div>
+
+        <div>
+          <div class="text-[11px] font-semibold text-gray-400 mb-1">Campanhas guiadas — um clique roda a sequência (cada passo é governado e aparece ao vivo)</div>
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+            <template x-for="camp in campaigns" :key="camp.title">
+              <button @click="runCampaign(camp)" :disabled="campaignRunning || consoleRunning" class="text-left bg-gray-800/60 border border-gray-800 hover:border-cyan-700 rounded-lg p-2 disabled:opacity-50 transition-colors">
+                <div class="flex items-center gap-1.5">
+                  <span x-text="camp.icon"></span>
+                  <span class="text-xs font-semibold text-gray-200" x-text="camp.title"></span>
+                  <span class="ml-auto text-[9px] px-1 rounded" :class="camp.risk==='intrusivo' ? 'bg-amber-900/60 text-amber-300' : 'bg-emerald-900/60 text-emerald-300'" x-text="camp.risk"></span>
+                </div>
+                <div class="text-[11px] text-gray-400 mt-0.5" x-text="camp.desc"></div>
+                <div class="text-[10px] text-gray-600 mt-0.5"><span x-text="(camp.steps ? camp.steps.length : 0)"></span> passos</div>
+              </button>
+            </template>
+          </div>
+        </div>
+
+        <template x-if="campaignRunning || campaignState.paused">
+          <div class="flex items-center gap-2 text-xs bg-surface-950 border border-gray-800 rounded-lg p-2">
+            <span x-show="campaignRunning" class="text-cyan-300 animate-pulse">▶</span>
+            <div class="flex-1">
+              <div class="text-gray-300"><b x-text="campaignState.name"></b> — <span x-text="campaignState.current"></span></div>
+              <div class="text-[10px] text-gray-500">passo <span x-text="campaignState.done"></span>/<span x-text="campaignState.total"></span></div>
+              <template x-if="campaignState.paused"><div class="text-amber-400 text-[11px] mt-0.5" x-text="campaignState.paused"></div></template>
+            </div>
+            <button x-show="campaignRunning" @click="cancelCampaign()" class="text-[11px] px-2 py-1 rounded bg-red-700 hover:bg-red-600 text-white">Parar campanha</button>
+          </div>
+        </template>
+      </div>
+
       <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <!-- Terminal -->
         <div class="lg:col-span-2 flex flex-col bg-surface-900 border border-gray-800 rounded-xl overflow-hidden">
@@ -758,6 +808,51 @@
           </div>
         </div>
       </div>
+
+      <!-- Modal: definir alvo / programa (escopo ROE) -->
+      <template x-if="targetSetup.show">
+        <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" @click.self="targetSetup.show=false">
+          <div class="bg-surface-900 border border-gray-700 rounded-xl p-4 w-full max-w-lg space-y-3">
+            <div class="flex items-center justify-between">
+              <h3 class="text-sm font-semibold text-white">🎯 Definir alvo / programa (escopo ROE)</h3>
+              <button @click="targetSetup.show=false" class="text-gray-500 hover:text-gray-300">✕</button>
+            </div>
+            <p class="text-[11px] text-gray-400">O escopo é a lista de domínios/hosts que você PODE testar. Tudo fora disso é bloqueado automaticamente. Nunca inclua algo que o programa não autorize — tocar fora do escopo te bane e pode ser crime.</p>
+            <div class="flex gap-2 text-xs">
+              <button @click="targetSetup.mode='bugbounty'" class="px-2 py-1 rounded" :class="targetSetup.mode==='bugbounty' ? 'bg-cyan-700 text-white' : 'bg-gray-800 text-gray-300'">Programa bug bounty (externo)</button>
+              <button @click="targetSetup.mode='lab'" class="px-2 py-1 rounded" :class="targetSetup.mode==='lab' ? 'bg-cyan-700 text-white' : 'bg-gray-800 text-gray-300'">Meu lab (auto)</button>
+            </div>
+            <input x-model="targetSetup.name" placeholder="Nome (ex: Acme no HackerOne, ou Meu lab DVWA)" class="w-full bg-gray-800 border border-gray-700 text-xs text-gray-200 rounded px-2 py-1.5" />
+            <textarea x-model="targetSetup.scope" rows="4" placeholder="Domínios/hosts in-scope, um por linha:&#10;exemplo.com&#10;*.exemplo.com&#10;host.docker.internal" class="w-full bg-gray-800 border border-gray-700 text-xs text-gray-200 rounded px-2 py-1.5 font-mono"></textarea>
+            <div class="text-[11px]" :class="targetSetup.mode==='lab' ? 'text-emerald-400' : 'text-amber-400'">
+              <template x-if="targetSetup.mode==='lab'"><span>Lab: todas as classes pré-autorizadas, sem pausa. Use só no SEU ambiente autorizado.</span></template>
+              <template x-if="targetSetup.mode==='bugbounty'"><span>Externo: recon/passivo automático; passo intrusivo/exploit só com a sua confirmação. (Exploit fica fora do auto — amplie as classes manualmente se o programa permitir.)</span></template>
+            </div>
+            <div class="flex items-center justify-end gap-2">
+              <span x-show="targetSetup.msg" class="text-[11px] text-amber-400 mr-auto" x-text="targetSetup.msg"></span>
+              <button @click="targetSetup.show=false" class="text-xs px-3 py-1.5 rounded bg-gray-700 text-gray-200">Cancelar</button>
+              <button @click="createTarget()" :disabled="targetSetup.busy" class="text-xs px-3 py-1.5 rounded bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white font-semibold"><span x-show="!targetSetup.busy">Criar</span><span x-show="targetSetup.busy">…</span></button>
+            </div>
+          </div>
+        </div>
+      </template>
+
+      <!-- Modal: confirmação de passo intrusivo -->
+      <template x-if="campaignConfirm.show">
+        <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div class="bg-surface-900 border border-amber-700 rounded-xl p-4 w-full max-w-md space-y-3">
+            <h3 class="text-sm font-semibold text-amber-300">⚠ Confirmar passo</h3>
+            <div class="text-xs text-gray-200" x-text="campaignConfirm.title"></div>
+            <div class="text-[11px] text-gray-400" x-text="campaignConfirm.why"></div>
+            <code class="block text-[11px] text-cyan-300 bg-surface-950 rounded p-2 break-all" x-text="campaignConfirm.command"></code>
+            <p class="text-[11px] text-amber-400">Isto age ativamente sobre o alvo. Só continue se o programa autoriza este tipo de teste.</p>
+            <div class="flex justify-end gap-2">
+              <button @click="resolveConfirm(false)" class="text-xs px-3 py-1.5 rounded bg-gray-700 text-gray-200">Pular</button>
+              <button @click="resolveConfirm(true)" class="text-xs px-3 py-1.5 rounded bg-amber-600 hover:bg-amber-500 text-white font-semibold">Sim, rodar</button>
+            </div>
+          </div>
+        </div>
+      </template>
     </div>
 
     <!-- ============================================================ -->
@@ -3158,6 +3253,46 @@
         consoleWs: null,          // dedicated WebSocket for live streaming (separate from the agent WS)
         consoleWsConnected: false,
         _consoleActive: null,     // the history entry currently being streamed
+        // ===== Campanhas guiadas + alvo/engajamento (Fase 1) =====
+        // Uma campanha = sequência de passos (comandos) por objetivo. Cada passo roda
+        // pelo MESMO console governado (classify + ROE + audit). Passo intrusivo contra
+        // alvo externo pede confirmação simples; no lab (auto_approve) corre direto.
+        activeEngagement: null,
+        targetSetup: { show: false, mode: 'bugbounty', name: '', scope: '', busy: false, msg: '' },
+        campaignRunning: false,
+        campaignCancel: false,
+        campaignState: { name: '', total: 0, done: 0, current: '', paused: '' },
+        campaignConfirm: { show: false, title: '', why: '', command: '', _resolve: null },
+        // {host}=domínio/host sem esquema nem porta · {base}=host:porta · {url}=http(s)://...
+        campaigns: [
+          { icon: '🗺️', title: 'Mapear o alvo', risk: 'seguro', desc: 'Descobre subdomínios, hosts vivos, tecnologias e rotas. Só observa.', steps: [
+            { title: 'Descobrir subdomínios', why: 'Amplia a superfície sem tocar no alvo (OSINT).', cmd: 'subfinder -d {host} -silent' },
+            { title: 'Resolver e achar web vivo', why: 'Quais hosts respondem e qual a stack.', cmd: 'subfinder -d {host} -silent | dnsx -silent | httpx-toolkit -silent -tech-detect -status-code -title' },
+            { title: 'Rastrear endpoints', why: 'Mapeia rotas, parâmetros e arquivos JS.', cmd: 'katana -u {url} -d 2 -silent' },
+            { title: 'Screenshot do alvo', why: 'Triagem visual rápida de painéis/telas.', cmd: 'gowitness single {url}' },
+          ]},
+          { icon: '💰', title: 'Caçar frutos fáceis', risk: 'seguro', desc: 'Falhas conhecidas, arquivos/segredos expostos, takeover e CORS — onde iniciante mais fatura.', steps: [
+            { title: 'Scan de falhas conhecidas', why: 'CVEs, painéis expostos e desconfigurações (nuclei).', cmd: 'nuclei -u {url} -tags cve,exposure,misconfiguration -severity critical,high,medium -rl 50 -c 10' },
+            { title: 'Subdomain takeover', why: 'Subdomínio apontando para serviço não reclamado — paga bem e é fácil.', cmd: 'subfinder -d {host} -silent | dnsx -silent | httpx-toolkit -silent | nuclei -tags takeover -rl 50' },
+            { title: 'Segredos e arquivos esquecidos', why: 'Procura .git/.env/chaves e tokens expostos.', cmd: 'nuclei -u {url} -tags exposure,token,config -severity info,low,medium,high -rl 50' },
+            { title: 'CORS mal configurado', why: 'Origem refletida pode permitir roubo de dados autenticados.', cmd: 'curl -s -I -H "Origin: https://evil.example" {url} | grep -i "access-control"' },
+          ]},
+          { icon: '🌐', title: 'App web a fundo', risk: 'intrusivo', desc: 'Descobre rotas e parâmetros e testa XSS e SQLi ativamente.', steps: [
+            { title: 'Força bruta de diretórios', why: 'Acha admin, backups e APIs ocultas.', cmd: 'feroxbuster -u {url} -w /opt/seclists/Discovery/Web-Content/common.txt -q' },
+            { title: 'Descobrir parâmetros', why: 'Parâmetros escondidos viram superfície de teste.', cmd: 'arjun -u {url}' },
+            { title: 'Testar XSS (ativo)', why: 'Injeta payloads para provar Cross-Site Scripting.', cmd: 'dalfox url {url}', intrusive: true },
+            { title: 'Testar SQL injection (ativo)', why: 'Sonda injeção de SQL nos parâmetros (sem dump).', cmd: 'sqlmap -u "{url}" --batch --level 2 --risk 1', intrusive: true },
+          ]},
+          { icon: '🔌', title: 'Testar API', risk: 'intrusivo', desc: 'Enumera endpoints de API, testa GraphQL e checa exposições.', steps: [
+            { title: 'Enumerar endpoints', why: 'Mapeia a superfície da API (katana + JS crawling).', cmd: 'katana -u {url} -d 2 -jc -silent' },
+            { title: 'Exposições de API', why: 'Procura chaves, docs e configs expostas.', cmd: 'nuclei -u {url} -tags exposure,misconfiguration -rl 50' },
+            { title: 'Testar GraphQL (ativo)', why: 'Introspecção e abuso de queries em /graphql.', cmd: 'graphqlmap -u {url}/graphql', intrusive: true },
+          ]},
+          { icon: '📝', title: 'WordPress a fundo', risk: 'intrusivo', desc: 'Enumera usuários, plugins e temas vulneráveis de um site WordPress.', steps: [
+            { title: 'Enumerar WordPress (ativo)', why: 'Usuários, plugins e temas; dados de vuln precisam de --api-token do WPScan.', cmd: 'wpscan --url {url} --enumerate u,vp,vt --random-user-agent', intrusive: true },
+          ]},
+          { icon: '📋', title: 'Gerar relatório do programa', risk: 'seguro', desc: 'Abre a tela de relatórios para compilar tudo que foi descoberto e submeter.', special: 'report', steps: [] },
+        ],
         // Catalogo organizado POR OBJETIVO (nao por fase). Campos:
         //   req  = comando que INSTALA a ferramenta e REALMENTE roda no sandbox (pip --user) -> botao "Instalar"
         //   note = ressalva honesta (nao vem na imagem / precisa de privilegio). Sem req + com note => rebuild da imagem.
@@ -4880,6 +5015,116 @@
             .map(c => ({ cat: c.cat, items: c.items.filter(it => (it.cmd + ' ' + it.what + ' ' + it.why).toLowerCase().includes(q)) }))
             .filter(c => c.items.length);
         },
+
+        // ===== Campanhas guiadas (Fase 1) =====
+        async fetchActiveEngagement() {
+          const sid = this.currentSession?.name || this.currentSession?.id || null;
+          const data = await this.apiFetch('/redteam/engagements/active' + (sid ? ('?session_id=' + encodeURIComponent(sid)) : ''));
+          this.activeEngagement = (data && data.engagement) ? data.engagement : null;
+        },
+        openTargetSetup(mode) {
+          this.targetSetup = { show: true, mode: mode || 'bugbounty', name: '', scope: '', busy: false, msg: '' };
+          const t = (this.currentSession?.target || '').replace(/^\w+:\/\//, '').replace(/\/.*$/, '');
+          if (t) this.targetSetup.scope = t;
+          if (this.currentSession?.name) this.targetSetup.name = this.currentSession.name;
+        },
+        async createTarget() {
+          const scope = (this.targetSetup.scope || '').split('\n').map(s => s.trim()).filter(Boolean);
+          if (!this.targetSetup.name.trim()) { this.targetSetup.msg = 'Dê um nome ao alvo/programa.'; return; }
+          if (!scope.length) { this.targetSetup.msg = 'Informe ao menos um domínio/host in-scope (um por linha).'; return; }
+          this.targetSetup.busy = true; this.targetSetup.msg = '';
+          const sid = this.currentSession?.name || this.currentSession?.id || null;
+          let data;
+          if (this.targetSetup.mode === 'lab') {
+            data = await this.apiFetch('/redteam/engagements/lab-preset', { method: 'POST',
+              body: JSON.stringify({ name: this.targetSetup.name.trim(), scope, session_id: sid }) });
+          } else {
+            data = await this.apiFetch('/redteam/engagements', { method: 'POST',
+              body: JSON.stringify({ name: this.targetSetup.name.trim(), scope, allowed_classes: ['passive', 'active'], session_id: sid }) });
+          }
+          this.targetSetup.busy = false;
+          if (data && data.engagement) { this.activeEngagement = data.engagement; this.targetSetup.show = false; }
+          else { this.targetSetup.msg = 'Falha ao criar o engajamento. Verifique o servidor/API.'; }
+        },
+        campaignTarget() {
+          if (this.activeEngagement && (this.activeEngagement.scope || []).length) {
+            const s = String(this.activeEngagement.scope[0]).replace(/^\*\./, '').trim();
+            if (s) return s;
+          }
+          return (this.currentSession?.target || '').trim();
+        },
+        _resolveTargets(cmd) {
+          const t = this.campaignTarget();
+          if (!t) return null;
+          const base = t.replace(/^\w+:\/\//, '').replace(/\/.*$/, '');
+          const host = base.replace(/:\d+$/, '');
+          const url = /^\w+:\/\//.test(t) ? t : ('http://' + base);
+          return cmd.replace(/\{url\}/g, url).replace(/\{host\}/g, host).replace(/\{base\}/g, base);
+        },
+        _waitConsoleIdle() {
+          return new Promise((resolve) => {
+            const started = Date.now();
+            const t = setInterval(() => {
+              // Resolve quando o console ociosa, ou por guarda de segurança (20 min).
+              if (!this.consoleRunning || (Date.now() - started) > 1200000) { clearInterval(t); resolve(); }
+            }, 150);
+          });
+        },
+        confirmStep(step, command) {
+          return new Promise((resolve) => {
+            this.campaignConfirm = { show: true, title: step.title || '', why: step.why || '', command: command || '', _resolve: resolve };
+          });
+        },
+        resolveConfirm(ok) {
+          const r = this.campaignConfirm._resolve;
+          this.campaignConfirm = { show: false, title: '', why: '', command: '', _resolve: null };
+          if (r) r(ok);
+        },
+        async runCampaign(camp) {
+          if (this.campaignRunning || this.consoleRunning) return;
+          if (camp.special === 'report') { this.currentView = 'reports'; if (this.fetchReports) this.fetchReports(); return; }
+          await this.fetchActiveEngagement();
+          const target = this.campaignTarget();
+          if (!target) {
+            this.consoleHistory.push({ command: '# campanha: ' + camp.title, running: false, stdout: '', stderr: 'Defina o alvo/programa primeiro (botão 🎯) ou abra uma operação com alvo.', exit_code: -1, blocked: false });
+            this.$nextTick(() => this.scrollConsoleLog());
+            return;
+          }
+          const labAuto = !!(this.activeEngagement && this.activeEngagement.auto_approve);
+          if (!this.activeEngagement) {
+            const go = await this.confirmStep(
+              { title: 'Sem programa/alvo com escopo definido', why: 'Sem um engajamento ativo não há trava de escopo (ROE). Só prossiga se este for o SEU ambiente autorizado; para bug bounty, defina o programa primeiro.' },
+              'alvo atual: ' + target);
+            if (!go) return;
+          }
+          this.campaignRunning = true; this.campaignCancel = false;
+          this.campaignState = { name: camp.title, total: camp.steps.length, done: 0, current: 'iniciando…', paused: '' };
+          for (let i = 0; i < camp.steps.length; i++) {
+            if (this.campaignCancel) { this.campaignState.paused = 'Campanha interrompida pelo operador.'; break; }
+            const step = camp.steps[i];
+            const command = this._resolveTargets(step.cmd);
+            if (!command) { this.campaignState.paused = 'Alvo inválido.'; break; }
+            this.campaignState.current = step.title; this.campaignState.done = i;
+            if (step.intrusive && !labAuto) {
+              const ok = await this.confirmStep(step, command);
+              if (!ok) {
+                this.consoleHistory.push({ command: '# pulado: ' + command, running: false, stdout: '', stderr: '(passo intrusivo não confirmado — pulado)', exit_code: 0, blocked: false });
+                this.$nextTick(() => this.scrollConsoleLog());
+                continue;
+              }
+            }
+            await this.runConsole(command);
+            await this._waitConsoleIdle();
+            const last = this.consoleHistory[this.consoleHistory.length - 1];
+            if (last && last.blocked) {
+              this.campaignState.paused = 'Pausado: passo bloqueado pelo ROE (alvo/classe fora do escopo). Ajuste o programa (botão 🎯) ou as classes permitidas.';
+              break;
+            }
+          }
+          if (!this.campaignState.paused) { this.campaignState.done = camp.steps.length; this.campaignState.current = 'concluída ✓'; }
+          this.campaignRunning = false;
+        },
+        cancelCampaign() { this.campaignCancel = true; this.cancelConsole(); },
 
         async fetchSessions() {
           const data = await this.apiFetch('/sessions');
