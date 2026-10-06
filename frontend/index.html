@@ -3269,7 +3269,7 @@
             { title: 'Descobrir subdomínios', why: 'Amplia a superfície sem tocar no alvo (OSINT).', cmd: 'subfinder -d {host} -silent' },
             { title: 'Resolver e achar web vivo', why: 'Quais hosts respondem e qual a stack.', cmd: 'subfinder -d {host} -silent | dnsx -silent | httpx-toolkit -silent -tech-detect -status-code -title' },
             { title: 'Rastrear endpoints', why: 'Mapeia rotas, parâmetros e arquivos JS.', cmd: 'katana -u {url} -d 2 -silent' },
-            { title: 'Screenshot do alvo', why: 'Triagem visual rápida de painéis/telas.', cmd: 'gowitness single {url}' },
+            { title: 'Screenshot do alvo', why: 'Triagem visual rápida de painéis/telas.', cmd: 'gowitness scan single -u {url}' },
           ]},
           { icon: '💰', title: 'Caçar frutos fáceis', risk: 'seguro', desc: 'Falhas conhecidas, arquivos/segredos expostos, takeover e CORS — onde iniciante mais fatura.', steps: [
             { title: 'Scan de falhas conhecidas', why: 'CVEs, painéis expostos e desconfigurações (nuclei).', cmd: 'nuclei -u {url} -tags cve,exposure,misconfiguration -severity critical,high,medium -rl 50 -c 10' },
@@ -3315,7 +3315,7 @@
             { cmd: 'nmap -sT -Pn -sV -p- --min-rate 1000 <host>', what: 'Varre portas (TCP connect) e identifica servicos/versoes.', why: 'Mapeia o que esta exposto e escutando.', example: 'nmap -sT -Pn -sV -p- --min-rate 1000 host.docker.internal' },
             { cmd: 'httpx-toolkit -u <host> -tech-detect -status-code -title', what: 'Sonda HTTP: status, titulo e tecnologias.', why: 'Confirma servicos web ativos e a stack.', example: 'httpx-toolkit -u host.docker.internal:8080 -tech-detect -status-code -title' },
             { cmd: 'katana -u <url> -d 3 -silent', what: 'Crawler: mapeia URLs e endpoints do site.', why: 'Descobre a superficie web (rotas, parametros, JS).', example: 'katana -u http://host.docker.internal:8080 -d 3 -silent' },
-            { cmd: 'gowitness single <url>', what: 'Captura screenshot da pagina (recon visual).', why: 'Triagem rapida de muitos hosts/paineis por imagem.', example: 'gowitness single http://host.docker.internal:8080' },
+            { cmd: 'gowitness scan single -u <url>', what: 'Captura screenshot da pagina (recon visual). gowitness v3: o "single" virou subcomando de "scan".', why: 'Triagem rapida de muitos hosts/paineis por imagem.', example: 'gowitness scan single -u http://host.docker.internal:8080', note: 'gowitness v3 precisa de Chrome/Chromium (baixa um por padrao); se o download falhar no sandbox, passe --chrome-path.' },
             { cmd: 'masscan -p1-65535 <host> --rate 1000', what: 'Varredura de portas em massa (muito rapida).', why: 'Cobre /16 rapidamente em redes grandes.', example: 'masscan -p1-1000 host.docker.internal --rate 1000', note: 'Requer raw sockets/root — pode falhar no sandbox (nobody). Prefira nmap -sT.' },
           ]},
           { cat: '🌐 Aplicação Web (geral)', items: [
